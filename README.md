@@ -153,6 +153,21 @@ The CorePass app sends:
 - **Body**: `{ coreId, credentialId, timestamp, userData }`
 - **Header**: `X-Signature` (Ed448 signature)
 
+### Canonical payload + signature input
+
+For signature verification, the server **does not** use the raw request body bytes. Instead it:
+
+- **Canonicalizes JSON**: recursively sorts object keys alphabetically and serializes with `JSON.stringify(...)` (so it is **minified**, no whitespace).
+- **Builds signature input** as:
+
+```text
+signatureInput = "POST\n" + signaturePath + "\n" + canonicalJsonBody
+```
+
+Then it verifies `X-Signature` (Ed448) over `UTF-8(signatureInput)`.
+
+This means the CorePass signer must sign the **same canonical JSON string** (alphabetically ordered + minified) and the same `signaturePath` (defaults to `/passkey/data`, configurable via `signaturePath`).
+
 `userData` fields:
 
 | Field | Type | Example | Notes |
@@ -170,9 +185,9 @@ The CorePass app sends:
 
 `provided_till` is stored as a **Unix timestamp in seconds**:
 
-\[
-provided\_till = \lfloor now\_sec \rfloor + dataExpMinutes \times 60
-\]
+```text
+provided_till = floor(now_sec) + dataExpMinutes * 60
+```
 
 ## Notes on Auth.js internals
 
