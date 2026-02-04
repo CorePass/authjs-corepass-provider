@@ -191,6 +191,84 @@ import { kvChallengeStore } from "authjs-corepass-provider"
 // const challengeStore = kvChallengeStore(env.COREPASS_KV)
 ```
 
+### Example: Vercel KV (Redis)
+
+```ts
+import { vercelKvChallengeStore } from "authjs-corepass-provider"
+import { kv } from "@vercel/kv"
+
+// Vercel manages connection details via environment variables.
+// See Vercel KV setup for the required env vars.
+
+const challengeStore = vercelKvChallengeStore({
+    set: (key, value, { ex }) => kv.set(key, value, { ex }),
+    get: (key) => kv.get<string>(key),
+    del: (key) => kv.del(key),
+})
+```
+
+### Example: Upstash Redis REST (`@upstash/redis`)
+
+```ts
+import { upstashRedisChallengeStore } from "authjs-corepass-provider"
+import { Redis } from "@upstash/redis"
+
+const redis = new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL!,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+})
+
+const challengeStore = upstashRedisChallengeStore({
+    set: (key, value, { ex }) => redis.set(key, value, { ex }),
+    get: (key) => redis.get<string>(key),
+    del: (key) => redis.del(key),
+})
+```
+
+### Example: Cloudflare Durable Objects
+
+Durable Objects are a good fit if you want low-latency ephemeral state close to your Worker.
+
+```ts
+import { durableObjectChallengeStore } from "authjs-corepass-provider"
+
+// Your Durable Object must implement these routes:
+// - POST /challenge/put { key, value, ttlSeconds }
+// - GET  /challenge/get?key=...
+// - POST /challenge/delete { key }
+//
+// Then:
+// const challengeStore = durableObjectChallengeStore(env.COREPASS_DO.get(id))
+```
+
+### Example: DynamoDB (AWS SDK v3)
+
+If you already run on AWS and want a managed KV with TTL:
+
+```ts
+import { dynamoChallengeStore } from "authjs-corepass-provider"
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb"
+import { DynamoDBDocumentClient, PutCommand, GetCommand, DeleteCommand } from "@aws-sdk/lib-dynamodb"
+
+const TableName = process.env.COREPASS_CHALLENGE_TABLE!
+const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}))
+const nowSec = () => Math.floor(Date.now() / 1000)
+
+// This library doesn't hard-depend on AWS SDK; you provide a small adapter:
+const challengeStore = dynamoChallengeStore({
+    put: ({ key, value, expiresAt }) =>
+        ddb.send(new PutCommand({ TableName, Item: { pk: key, value, expiresAt } })),
+    get: async (key) => {
+        const res = await ddb.send(new GetCommand({ TableName, Key: { pk: key } }))
+        const item = res.Item as { value?: string; expiresAt?: number } | undefined
+        if (!item?.value || typeof item.expiresAt !== "number") return null
+        if (item.expiresAt < nowSec()) return null
+        return { value: item.value, expiresAt: item.expiresAt }
+    },
+    delete: (key) => ddb.send(new DeleteCommand({ TableName, Key: { pk: key } })),
+})
+```
+
 ### Example: SQL / D1
 
 Use a table like:
