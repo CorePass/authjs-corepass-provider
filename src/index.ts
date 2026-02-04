@@ -27,3 +27,22 @@ export {
 	type DurableObjectStubLike,
 	type DynamoLike,
 } from "./server/challenge-stores.js"
+
+export {
+	d1CorePassStore,
+	postgresCorePassStore,
+	supabaseCorePassStore,
+	type D1Like,
+	type PgLike,
+	type SupabaseLike,
+} from "./server/stores.js"
+
+export {
+	createCorePassServerD1,
+	createCorePassServerPostgres,
+	createCorePassServerSupabase,
+	createCorePassServerCloudflareD1Kv,
+	createCorePassServerPostgresRedis,
+	createCorePassServerSupabaseUpstash,
+	createCorePassServerSupabaseVercelKv,
+} from "./server/factories.js"

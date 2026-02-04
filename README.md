@@ -105,7 +105,16 @@ import { createCorePassServer } from "authjs-corepass-provider"
 
 const corepass = createCorePassServer({
   adapter: /* Auth.js adapter (must implement WebAuthn + user methods) */,
-  store: /* CorePassStore implementation (pending regs + coreId mapping + profile) */,
+  // store must implement CorePassStore:
+  // - pending registrations (default flow)
+  // - coreId <-> userId identity mapping
+  // - profile metadata (o18y/o21y/kyc/provided_till)
+  //
+  // Built-ins:
+  // - d1CorePassStore(db) for Cloudflare D1
+  // - postgresCorePassStore(pg) for Postgres (node-postgres, etc)
+  // - supabaseCorePassStore(supabase) for Supabase client
+  store: /* CorePassStore implementation */,
   challengeStore: /* CorePassChallengeStore implementation (KV/Redis/etc) */,
   rpID: "example.com",
   rpName: "Example",
@@ -132,6 +141,21 @@ export async function POST(req: Request) {
   return new Response("Not found", { status: 404 })
 }
 ```
+
+### “Unified” server factory helpers (same DB client)
+
+If you want to avoid manually wiring `store: d1CorePassStore(...)` etc, you can use the factories:
+
+- `createCorePassServerD1({ db, ... })`
+- `createCorePassServerPostgres({ pg, ... })`
+- `createCorePassServerSupabase({ supabase, ... })`
+- `createCorePassServerCloudflareD1Kv({ db, kv, ... })`
+- `createCorePassServerPostgresRedis({ pg, redis, ... })`
+- `createCorePassServerSupabaseUpstash({ supabase, redis, ... })`
+- `createCorePassServerSupabaseVercelKv({ supabase, kv, ... })`
+
+This does **not** create an Auth.js adapter for you (adapters are separate packages), but it ensures the CorePass
+store uses the same DB client you pass in.
 
 ## `challengeStore` (what it is, and what it supports)
 
@@ -322,7 +346,8 @@ export function sqlChallengeStore(db: {
 
 Apply your adapter’s default Auth.js schema, then apply:
 
-- `db/corepass-schema.sql`
+- `db/corepass-schema.sql` (SQLite/D1)
+- `db/corepass-schema.postgres.sql` (PostgreSQL/Supabase)
 
 This adds:
 
