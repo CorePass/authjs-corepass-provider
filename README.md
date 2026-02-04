@@ -141,10 +141,15 @@ This adds:
 - **`pubKeyCredAlgs`**: defaults to `[-257, -7, -8]` (RS256, ES256, Ed25519).
 - **`allowImmediateFinalize`**: if enabled, `finishRegistration` may finalize immediately if `coreId` is provided in the browser payload. This is **disabled by default** because it weakens the CoreID ownership guarantee (the default flow requires the Ed448-signed `/passkey/data` request).
 - **`emailRequired`**: defaults to `false` (email can arrive later via `/passkey/data`). If no email is ever provided, the library creates the Auth.js user with a deterministic synthetic email and updates it once a real email is received.
-- **`enableRefId`**: defaults to `false`. When disabled, any `refId` passed in requests is ignored and never stored.
+- **`requireO18y`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.o18y=true` or finalization is rejected. Not enforced for immediate-finalize.
+- **`requireO21y`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.o21y=true` or finalization is rejected. Not enforced for immediate-finalize.
+- **`requireKyc`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.kyc=true` or finalization is rejected. Not enforced for immediate-finalize.
+- **`enableRefId`**: defaults to `false`. When enabled, the server generates and stores a `refId` (UUIDv4) for the CoreID identity and can include it in webhooks. When disabled, no `refId` is generated or stored.
 - **`postWebhooks`**: defaults to `false`. When enabled, a webhook POST is sent after finalization with `{ coreId, refId? }`.
 - **`webhookUrl`**: required if `postWebhooks: true`.
 - **`webhookRetries`**: defaults to `3` (range `1-10`). Retries happen on non-2xx responses or network errors.
+- **`pendingTtlSeconds`**: defaults to `600` (10 minutes). Pending registrations expire after this and are dropped.
+- **`timestampWindowMs`**: defaults to `600000` (10 minutes). Enrichment `timestamp` must be within this window.
 
 ## Enrichment payload (`/passkey/data`)
 
@@ -167,6 +172,10 @@ signatureInput = "POST\n" + signaturePath + "\n" + canonicalJsonBody
 Then it verifies `X-Signature` (Ed448) over `UTF-8(signatureInput)`.
 
 This means the CorePass signer must sign the **same canonical JSON string** (alphabetically ordered + minified) and the same `signaturePath` (defaults to `/passkey/data`, configurable via `signaturePath`).
+
+### Timestamp units
+
+`timestamp` is required and must be a **Unix timestamp in microseconds**.
 
 `userData` fields:
 
