@@ -31,6 +31,7 @@ sequenceDiagram
   actor A as CorePass app
 
   B->>S: POST /webauthn/start { email? }
+  Note over B,S: Pending TTL default is 10 minutes (pendingTtlSeconds=600)
   S->>KV: put reg:sid {challenge,email} ttl
   S-->>B: 200 CreationOptions + Set-Cookie corepass.sid
   B->>B: navigator.credentials.create()
@@ -46,7 +47,8 @@ sequenceDiagram
   S->>DB: load+delete pending by credentialId
   S->>S: create/link Auth.js user+account+authenticator
   S->>DB: upsert CorePass identity/profile (provided_till, flags)
-  S->>S: (optional) POST webhook { coreId, refId? } with retries
+  S->>S: (optional) POST webhook { coreId, refId? } (webhookRetries, default 3)
+  Note over S: If webhookSecret is set, include HMAC headers:\nX-Webhook-Timestamp + X-Webhook-Signature
   S-->>A: 200 ok
 ```
 
