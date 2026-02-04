@@ -12,3 +12,10 @@ export type {
 
 export { createCorePassServer } from "./server/create-corepass-server.js"
 export { validateCoreIdMainnet, deriveEd448PublicKeyFromCoreId } from "./server/coreid.js"
+export {
+	memoryChallengeStore,
+	redisChallengeStore,
+	kvChallengeStore,
+	type RedisLike,
+	type KvLike,
+} from "./server/challenge-stores.js"

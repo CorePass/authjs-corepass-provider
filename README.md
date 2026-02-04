@@ -146,76 +146,49 @@ between:
 
 It must support **TTL** (seconds) and **delete on use**.
 
+### How to wire it to real systems
+
+You create/access your KV/Redis client *in your runtime* and pass it into the helper:
+
+- Cloudflare Workers: use an **`env` binding**
+- Node/Next.js/etc: create a **Redis client** using URL/token from env vars
+
 ### Example: in-memory (development only)
 
 ```ts
-import type { CorePassChallengeStore } from "authjs-corepass-provider"
-
-export function memoryChallengeStore(): CorePassChallengeStore {
-  const m = new Map<string, { value: string; expiresAtMs: number }>()
-
-  return {
-    async put(key, value, ttlSeconds) {
-      m.set(key, { value, expiresAtMs: Date.now() + ttlSeconds * 1000 })
-    },
-    async get(key) {
-      const row = m.get(key)
-      if (!row) return null
-      if (Date.now() > row.expiresAtMs) {
-        m.delete(key)
-        return null
-      }
-      return row.value
-    },
-    async delete(key) {
-      m.delete(key)
-    },
-  }
-}
+import { memoryChallengeStore } from "authjs-corepass-provider"
 ```
 
 ### Example: Redis / Upstash
 
 ```ts
-import type { CorePassChallengeStore } from "authjs-corepass-provider"
+import { redisChallengeStore } from "authjs-corepass-provider"
+import { Redis } from "ioredis"
 
-export function redisChallengeStore(redis: {
-  set: (key: string, value: string, opts: { ex: number }) => Promise<unknown>
-  get: (key: string) => Promise<string | null>
-  del: (key: string) => Promise<unknown>
-}): CorePassChallengeStore {
-  return {
-    async put(key, value, ttlSeconds) {
-      await redis.set(key, value, { ex: ttlSeconds })
-    },
-    async get(key) {
-      return await redis.get(key)
-    },
-    async delete(key) {
-      await redis.del(key)
-    },
-  }
-}
+const redis = new Redis(process.env.REDIS_URL!)
+
+const challengeStore = redisChallengeStore({
+    set: (key, value, { ex }) => redis.set(key, value, "EX", ex),
+    get: (key) => redis.get(key),
+    del: (key) => redis.del(key),
+})
 ```
 
 ### Example: Cloudflare KV
 
 ```ts
-import type { CorePassChallengeStore } from "authjs-corepass-provider"
+import { kvChallengeStore } from "authjs-corepass-provider"
 
-export function kvChallengeStore(kv: KVNamespace): CorePassChallengeStore {
-  return {
-    async put(key, value, ttlSeconds) {
-      await kv.put(key, value, { expirationTtl: ttlSeconds })
-    },
-    async get(key) {
-      return await kv.get(key)
-    },
-    async delete(key) {
-      await kv.delete(key)
-    },
-  }
-}
+// wrangler.jsonc:
+// {
+//     "kv_namespaces": [
+//         { "binding": "COREPASS_KV", "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }
+//     ]
+// }
+//
+// Worker handler: env.COREPASS_KV is a KVNamespace binding.
+//
+// const challengeStore = kvChallengeStore(env.COREPASS_KV)
 ```
 
 ### Example: SQL / D1
