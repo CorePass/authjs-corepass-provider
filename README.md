@@ -105,7 +105,16 @@ import { createCorePassServer } from "authjs-corepass-provider"
 
 const corepass = createCorePassServer({
   adapter: /* Auth.js adapter (must implement WebAuthn + user methods) */,
-  store: /* CorePassStore implementation (pending regs + coreId mapping + profile) */,
+  // store must implement CorePassStore:
+  // - pending registrations (default flow)
+  // - coreId <-> userId identity mapping
+  // - profile metadata (o18y/o21y/kyc/provided_till)
+  //
+  // Built-ins:
+  // - d1CorePassStore(db) for Cloudflare D1
+  // - postgresCorePassStore(pg) for Postgres (node-postgres, etc)
+  // - supabaseCorePassStore(supabase) for Supabase client
+  store: /* CorePassStore implementation */,
   challengeStore: /* CorePassChallengeStore implementation (KV/Redis/etc) */,
   rpID: "example.com",
   rpName: "Example",
@@ -123,6 +132,16 @@ const corepass = createCorePassServer({
 //     }
 //   }
 // }
+//
+// Optional: logout webhook (call from Auth.js events.signOut)
+// events: {
+//   async signOut({ session }) {
+//     // You must be able to map the logout event to a userId.
+//     // How you obtain userId depends on your Auth.js setup/session strategy.
+//     // If you have it:
+//     // await corepass.postLogoutWebhook({ userId })
+//   }
+// }
 
 export async function POST(req: Request) {
   const url = new URL(req.url)
@@ -132,6 +151,21 @@ export async function POST(req: Request) {
   return new Response("Not found", { status: 404 })
 }
 ```
+
+### “Unified” server factory helpers (same DB client)
+
+If you want to avoid manually wiring `store: d1CorePassStore(...)` etc, you can use the factories:
+
+- `createCorePassServerD1({ db, ... })`
+- `createCorePassServerPostgres({ pg, ... })`
+- `createCorePassServerSupabase({ supabase, ... })`
+- `createCorePassServerCloudflareD1Kv({ db, kv, ... })`
+- `createCorePassServerPostgresRedis({ pg, redis, ... })`
+- `createCorePassServerSupabaseUpstash({ supabase, redis, ... })`
+- `createCorePassServerSupabaseVercelKv({ supabase, kv, ... })`
+
+This does **not** create an Auth.js adapter for you (adapters are separate packages), but it ensures the CorePass
+store uses the same DB client you pass in.
 
 ## `challengeStore` (what it is, and what it supports)
 
@@ -322,7 +356,8 @@ export function sqlChallengeStore(db: {
 
 Apply your adapter’s default Auth.js schema, then apply:
 
-- `db/corepass-schema.sql`
+- `db/corepass-schema.sql` (SQLite/D1)
+- `db/corepass-schema.postgres.sql` (PostgreSQL/Supabase)
 
 This adds:
 
@@ -350,6 +385,11 @@ This adds:
   - **`loginWebhookUrl`**: required if `postLoginWebhooks: true`.
   - **`loginWebhookSecret`**: optional. Same signing format/headers as registration.
   - **`loginWebhookRetries`**: defaults to `3` (range `1-10`). Retries happen on non-2xx responses or network errors.
+- **Logout webhook options**:
+  - **`postLogoutWebhooks`**: defaults to `false`.
+  - **`logoutWebhookUrl`**: required if `postLogoutWebhooks: true`.
+  - **`logoutWebhookSecret`**: optional. Same signing format/headers as registration.
+  - **`logoutWebhookRetries`**: defaults to `3` (range `1-10`). Retries happen on non-2xx responses or network errors.
 - **`pendingTtlSeconds`**: defaults to `600` (10 minutes). Pending registrations expire after this and are dropped.
 - **`timestampWindowMs`**: defaults to `600000` (10 minutes). Enrichment `timestamp` must be within this window.
 
