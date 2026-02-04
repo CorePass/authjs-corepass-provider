@@ -135,6 +135,140 @@ export async function POST(req: Request) {
 }
 ```
 
+## `challengeStore` (what it is, and what it supports)
+
+`challengeStore` is **not an Auth.js provider** and it is **not tied to WebAuthn/Passkey provider IDs**.
+It’s a minimal storage interface used by this package’s custom endpoints to persist the WebAuthn challenge
+between:
+
+- `POST /webauthn/start` (generate challenge)
+- `POST /webauthn/finish` (verify attestation against expected challenge)
+
+It must support **TTL** (seconds) and **delete on use**.
+
+### Example: in-memory (development only)
+
+```ts
+import type { CorePassChallengeStore } from "authjs-corepass-provider"
+
+export function memoryChallengeStore(): CorePassChallengeStore {
+  const m = new Map<string, { value: string; expiresAtMs: number }>()
+
+  return {
+    async put(key, value, ttlSeconds) {
+      m.set(key, { value, expiresAtMs: Date.now() + ttlSeconds * 1000 })
+    },
+    async get(key) {
+      const row = m.get(key)
+      if (!row) return null
+      if (Date.now() > row.expiresAtMs) {
+        m.delete(key)
+        return null
+      }
+      return row.value
+    },
+    async delete(key) {
+      m.delete(key)
+    },
+  }
+}
+```
+
+### Example: Redis / Upstash
+
+```ts
+import type { CorePassChallengeStore } from "authjs-corepass-provider"
+
+export function redisChallengeStore(redis: {
+  set: (key: string, value: string, opts: { ex: number }) => Promise<unknown>
+  get: (key: string) => Promise<string | null>
+  del: (key: string) => Promise<unknown>
+}): CorePassChallengeStore {
+  return {
+    async put(key, value, ttlSeconds) {
+      await redis.set(key, value, { ex: ttlSeconds })
+    },
+    async get(key) {
+      return await redis.get(key)
+    },
+    async delete(key) {
+      await redis.del(key)
+    },
+  }
+}
+```
+
+### Example: Cloudflare KV
+
+```ts
+import type { CorePassChallengeStore } from "authjs-corepass-provider"
+
+export function kvChallengeStore(kv: KVNamespace): CorePassChallengeStore {
+  return {
+    async put(key, value, ttlSeconds) {
+      await kv.put(key, value, { expirationTtl: ttlSeconds })
+    },
+    async get(key) {
+      return await kv.get(key)
+    },
+    async delete(key) {
+      await kv.delete(key)
+    },
+  }
+}
+```
+
+### Example: SQL / D1
+
+Use a table like:
+
+```sql
+CREATE TABLE IF NOT EXISTS corepass_challenges (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_corepass_challenges_expires_at ON corepass_challenges(expires_at);
+```
+
+Then implement:
+
+```ts
+import type { CorePassChallengeStore } from "authjs-corepass-provider"
+
+export function sqlChallengeStore(db: {
+  exec: (sql: string, params?: unknown[]) => Promise<unknown>
+  get: (sql: string, params?: unknown[]) => Promise<{ value: string; expires_at: number } | null>
+}): CorePassChallengeStore {
+  const nowSec = () => Math.floor(Date.now() / 1000)
+
+  return {
+    async put(key, value, ttlSeconds) {
+      const expiresAt = nowSec() + ttlSeconds
+      await db.exec(
+        "INSERT OR REPLACE INTO corepass_challenges (key, value, expires_at) VALUES (?1, ?2, ?3)",
+        [key, value, expiresAt]
+      )
+    },
+    async get(key) {
+      const row = await db.get(
+        "SELECT value, expires_at FROM corepass_challenges WHERE key = ?1",
+        [key]
+      )
+      if (!row) return null
+      if (row.expires_at < nowSec()) {
+        await db.exec("DELETE FROM corepass_challenges WHERE key = ?1", [key])
+        return null
+      }
+      return row.value
+    },
+    async delete(key) {
+      await db.exec("DELETE FROM corepass_challenges WHERE key = ?1", [key])
+    },
+  }
+}
+```
+
 ## Database
 
 Apply your adapter’s default Auth.js schema, then apply:
