@@ -1,41 +1,42 @@
 {
-  "name": "authjs-corepass-provider",
-  "version": "0.1.0",
-  "description": "CorePass provider + pending registration/enrichment helpers for Auth.js (@auth/core)",
-  "license": "MIT",
-  "type": "module",
-  "sideEffects": false,
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+    "name": "authjs-corepass-provider",
+    "version": "0.1.0",
+    "description": "CorePass provider + pending registration/enrichment helpers for Auth.js (@auth/core)",
+    "license": "MIT",
+    "type": "module",
+    "sideEffects": false,
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        },
+        "./provider": {
+            "types": "./dist/provider.d.ts",
+            "import": "./dist/provider.js"
+        }
     },
-    "./provider": {
-      "types": "./dist/provider.d.ts",
-      "import": "./dist/provider.js"
+    "files": [
+        "dist",
+        "db"
+    ],
+    "scripts": {
+        "build": "tsup",
+        "dev": "tsup --watch",
+        "typecheck": "tsc -p tsconfig.json --noEmit"
+    },
+    "dependencies": {
+        "@noble/curves": "^2.0.1",
+        "blockchain-wallet-validator": "^1.2.1",
+        "cbor-x": "^1.6.0"
+    },
+    "peerDependencies": {
+        "@auth/core": "^0.34.3"
+    },
+    "devDependencies": {
+        "@auth/core": "^0.34.3",
+        "@types/node": "^25.2.0",
+        "tsup": "^8.5.1",
+        "typescript": "^5.9.3"
     }
-  },
-  "files": [
-    "dist",
-    "db"
-  ],
-  "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
-  },
-  "dependencies": {
-    "@noble/curves": "^2.0.1",
-    "blockchain-wallet-validator": "^1.2.1",
-    "cbor-x": "^1.6.0"
-  },
-  "peerDependencies": {
-    "@auth/core": "^0.34.3"
-  },
-  "devDependencies": {
-    "@auth/core": "^0.34.3",
-    "@types/node": "^25.2.0",
-    "tsup": "^8.5.1",
-    "typescript": "^5.9.3"
-  }
 }
+
