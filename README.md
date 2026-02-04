@@ -80,7 +80,7 @@ npm install authjs-corepass-provider
 You also need:
 
 - `@auth/core` (peer dependency)
-- `@simplewebauthn/browser` in your frontend (Auth.js recommends `9.0.1`, same as Passkey docs)
+- `@simplewebauthn/browser` in your frontend
 
 ## Auth.js configuration
 
@@ -147,6 +147,7 @@ This adds:
 - **`enableRefId`**: defaults to `false`. When enabled, the server generates and stores a `refId` (UUIDv4) for the CoreID identity and can include it in webhooks. When disabled, no `refId` is generated or stored.
 - **`postWebhooks`**: defaults to `false`. When enabled, a webhook POST is sent after finalization with `{ coreId, refId? }`.
 - **`webhookUrl`**: required if `postWebhooks: true`.
+- **`webhookSecret`**: optional. If set, webhook requests are HMAC-signed (SHA-256) using `timestamp + "\\n" + body` and include `X-Webhook-Timestamp` (unix seconds) and `X-Webhook-Signature` (`sha256=<hex>`). If unset, webhooks are not signed.
 - **`webhookRetries`**: defaults to `3` (range `1-10`). Retries happen on non-2xx responses or network errors.
 - **`pendingTtlSeconds`**: defaults to `600` (10 minutes). Pending registrations expire after this and are dropped.
 - **`timestampWindowMs`**: defaults to `600000` (10 minutes). Enrichment `timestamp` must be within this window.

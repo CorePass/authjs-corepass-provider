@@ -197,6 +197,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 	const enableRefId = options.enableRefId ?? false
 	const postWebhooks = options.postWebhooks ?? false
 	const webhookUrl = options.webhookUrl
+	const webhookSecret = options.webhookSecret
 	const webhookRetriesRaw = options.webhookRetries ?? 3
 	const signaturePath = options.signaturePath ?? "/passkey/data"
 	const timestampWindowMs = options.timestampWindowMs ?? 10 * 60 * 1000
@@ -218,17 +219,40 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 	const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 	const retryDelayMs = (attempt: number) => Math.min(2000, 200 * 2 ** (attempt - 1))
 
+	const hmacSha256Hex = async (secret: string, message: string): Promise<string> => {
+		const key = await crypto.subtle.importKey(
+			"raw",
+			new TextEncoder().encode(secret),
+			{ name: "HMAC", hash: "SHA-256" },
+			false,
+			["sign"]
+		)
+		const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message))
+		return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("")
+	}
+
 	async function maybePostWebhook(args: { coreId: string; refId: string | null }) {
 		if (!postWebhooks || !webhookUrl) return
 		const payload: Record<string, unknown> = { coreId: args.coreId }
 		if (args.refId) payload.refId = args.refId
 
+		const body = JSON.stringify(payload)
+
 		for (let attempt = 1; attempt <= webhookRetries; attempt++) {
 			try {
+				const headers: Record<string, string> = { "content-type": "application/json" }
+				if (webhookSecret) {
+					const ts = String(nowSec())
+					const signatureInput = `${ts}\n${body}`
+					const sigHex = await hmacSha256Hex(webhookSecret, signatureInput)
+					headers["X-Webhook-Timestamp"] = ts
+					headers["X-Webhook-Signature"] = `sha256=${sigHex}`
+				}
+
 				const res = await fetch(webhookUrl, {
 					method: "POST",
-					headers: { "content-type": "application/json" },
-					body: JSON.stringify(payload),
+					headers,
+					body,
 				})
 				if (res.ok) return
 			} catch {
