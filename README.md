@@ -6,8 +6,6 @@ CorePass provider + server helpers for Auth.js (`@auth/core`) implementing the *
 - Server stores a **pending registration** (no Auth.js user/account/authenticator yet)
 - CorePass mobile app finalizes the account by calling **`POST /passkey/data`** with an **Ed448-signed** payload
 
-This design is based on the existing Cloudflare Worker implementation in `wall-func-injector`.
-
 ## What you get
 
 - **Provider**: `CorePass()` (wraps Auth.js WebAuthn with passkey-friendly defaults)
