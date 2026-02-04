@@ -146,76 +146,127 @@ between:
 
 It must support **TTL** (seconds) and **delete on use**.
 
+### How to wire it to real systems
+
+You create/access your KV/Redis client *in your runtime* and pass it into the helper:
+
+- Cloudflare Workers: use an **`env` binding**
+- Node/Next.js/etc: create a **Redis client** using URL/token from env vars
+
 ### Example: in-memory (development only)
 
 ```ts
-import type { CorePassChallengeStore } from "authjs-corepass-provider"
-
-export function memoryChallengeStore(): CorePassChallengeStore {
-  const m = new Map<string, { value: string; expiresAtMs: number }>()
-
-  return {
-    async put(key, value, ttlSeconds) {
-      m.set(key, { value, expiresAtMs: Date.now() + ttlSeconds * 1000 })
-    },
-    async get(key) {
-      const row = m.get(key)
-      if (!row) return null
-      if (Date.now() > row.expiresAtMs) {
-        m.delete(key)
-        return null
-      }
-      return row.value
-    },
-    async delete(key) {
-      m.delete(key)
-    },
-  }
-}
+import { memoryChallengeStore } from "authjs-corepass-provider"
 ```
 
 ### Example: Redis / Upstash
 
 ```ts
-import type { CorePassChallengeStore } from "authjs-corepass-provider"
+import { redisChallengeStore } from "authjs-corepass-provider"
+import { Redis } from "ioredis"
 
-export function redisChallengeStore(redis: {
-  set: (key: string, value: string, opts: { ex: number }) => Promise<unknown>
-  get: (key: string) => Promise<string | null>
-  del: (key: string) => Promise<unknown>
-}): CorePassChallengeStore {
-  return {
-    async put(key, value, ttlSeconds) {
-      await redis.set(key, value, { ex: ttlSeconds })
-    },
-    async get(key) {
-      return await redis.get(key)
-    },
-    async delete(key) {
-      await redis.del(key)
-    },
-  }
-}
+const redis = new Redis(process.env.REDIS_URL!)
+
+const challengeStore = redisChallengeStore({
+    set: (key, value, { ex }) => redis.set(key, value, "EX", ex),
+    get: (key) => redis.get(key),
+    del: (key) => redis.del(key),
+})
 ```
 
 ### Example: Cloudflare KV
 
 ```ts
-import type { CorePassChallengeStore } from "authjs-corepass-provider"
+import { kvChallengeStore } from "authjs-corepass-provider"
 
-export function kvChallengeStore(kv: KVNamespace): CorePassChallengeStore {
-  return {
-    async put(key, value, ttlSeconds) {
-      await kv.put(key, value, { expirationTtl: ttlSeconds })
+// wrangler.jsonc:
+// {
+//     "kv_namespaces": [
+//         { "binding": "COREPASS_KV", "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }
+//     ]
+// }
+//
+// Worker handler: env.COREPASS_KV is a KVNamespace binding.
+//
+// const challengeStore = kvChallengeStore(env.COREPASS_KV)
+```
+
+### Example: Vercel KV (Redis)
+
+```ts
+import { vercelKvChallengeStore } from "authjs-corepass-provider"
+import { kv } from "@vercel/kv"
+
+// Vercel manages connection details via environment variables.
+// See Vercel KV setup for the required env vars.
+
+const challengeStore = vercelKvChallengeStore({
+    set: (key, value, { ex }) => kv.set(key, value, { ex }),
+    get: (key) => kv.get<string>(key),
+    del: (key) => kv.del(key),
+})
+```
+
+### Example: Upstash Redis REST (`@upstash/redis`)
+
+```ts
+import { upstashRedisChallengeStore } from "authjs-corepass-provider"
+import { Redis } from "@upstash/redis"
+
+const redis = new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL!,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+})
+
+const challengeStore = upstashRedisChallengeStore({
+    set: (key, value, { ex }) => redis.set(key, value, { ex }),
+    get: (key) => redis.get<string>(key),
+    del: (key) => redis.del(key),
+})
+```
+
+### Example: Cloudflare Durable Objects
+
+Durable Objects are a good fit if you want low-latency ephemeral state close to your Worker.
+
+```ts
+import { durableObjectChallengeStore } from "authjs-corepass-provider"
+
+// Your Durable Object must implement these routes:
+// - POST /challenge/put { key, value, ttlSeconds }
+// - GET  /challenge/get?key=...
+// - POST /challenge/delete { key }
+//
+// Then:
+// const challengeStore = durableObjectChallengeStore(env.COREPASS_DO.get(id))
+```
+
+### Example: DynamoDB (AWS SDK v3)
+
+If you already run on AWS and want a managed KV with TTL:
+
+```ts
+import { dynamoChallengeStore } from "authjs-corepass-provider"
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb"
+import { DynamoDBDocumentClient, PutCommand, GetCommand, DeleteCommand } from "@aws-sdk/lib-dynamodb"
+
+const TableName = process.env.COREPASS_CHALLENGE_TABLE!
+const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}))
+const nowSec = () => Math.floor(Date.now() / 1000)
+
+// This library doesn't hard-depend on AWS SDK; you provide a small adapter:
+const challengeStore = dynamoChallengeStore({
+    put: ({ key, value, expiresAt }) =>
+        ddb.send(new PutCommand({ TableName, Item: { pk: key, value, expiresAt } })),
+    get: async (key) => {
+        const res = await ddb.send(new GetCommand({ TableName, Key: { pk: key } }))
+        const item = res.Item as { value?: string; expiresAt?: number } | undefined
+        if (!item?.value || typeof item.expiresAt !== "number") return null
+        if (item.expiresAt < nowSec()) return null
+        return { value: item.value, expiresAt: item.expiresAt }
     },
-    async get(key) {
-      return await kv.get(key)
-    },
-    async delete(key) {
-      await kv.delete(key)
-    },
-  }
-}
+    delete: (key) => ddb.send(new DeleteCommand({ TableName, Key: { pk: key } })),
+})
 ```
 
 ### Example: SQL / D1
