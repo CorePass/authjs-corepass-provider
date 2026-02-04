@@ -132,6 +132,16 @@ const corepass = createCorePassServer({
 //     }
 //   }
 // }
+//
+// Optional: logout webhook (call from Auth.js events.signOut)
+// events: {
+//   async signOut({ session }) {
+//     // You must be able to map the logout event to a userId.
+//     // How you obtain userId depends on your Auth.js setup/session strategy.
+//     // If you have it:
+//     // await corepass.postLogoutWebhook({ userId })
+//   }
+// }
 
 export async function POST(req: Request) {
   const url = new URL(req.url)
@@ -375,6 +385,11 @@ This adds:
   - **`loginWebhookUrl`**: required if `postLoginWebhooks: true`.
   - **`loginWebhookSecret`**: optional. Same signing format/headers as registration.
   - **`loginWebhookRetries`**: defaults to `3` (range `1-10`). Retries happen on non-2xx responses or network errors.
+- **Logout webhook options**:
+  - **`postLogoutWebhooks`**: defaults to `false`.
+  - **`logoutWebhookUrl`**: required if `postLogoutWebhooks: true`.
+  - **`logoutWebhookSecret`**: optional. Same signing format/headers as registration.
+  - **`logoutWebhookRetries`**: defaults to `3` (range `1-10`). Retries happen on non-2xx responses or network errors.
 - **`pendingTtlSeconds`**: defaults to `600` (10 minutes). Pending registrations expire after this and are dropped.
 - **`timestampWindowMs`**: defaults to `600000` (10 minutes). Enrichment `timestamp` must be within this window.
 

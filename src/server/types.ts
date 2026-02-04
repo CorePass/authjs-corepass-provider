@@ -195,6 +195,30 @@ export type CreateCorePassServerOptions = {
 	postLoginWebhooks?: boolean
 
 	/**
+	 * Logout webhook URL to POST after logout.
+	 *
+	 * Payload: `{ coreId, refId? }`
+	 */
+	logoutWebhookUrl?: string
+
+	/**
+	 * Logout webhook secret for HMAC signing (same header/signature format as registration).
+	 */
+	logoutWebhookSecret?: string
+
+	/**
+	 * Number of logout webhook delivery attempts. Allowed range: 1-10. Default: 3.
+	 */
+	logoutWebhookRetries?: number
+
+	/**
+	 * If enabled, POST a logout webhook after logout.
+	 *
+	 * Defaults to `false`.
+	 */
+	postLogoutWebhooks?: boolean
+
+	/**
 	 * If enabled, `finishRegistration` may finalize immediately when `coreId` is provided.
 	 * Defaults to false.
 	 *

@@ -204,6 +204,11 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 	const loginWebhookUrl = options.loginWebhookUrl
 	const loginWebhookSecret = options.loginWebhookSecret
 	const loginWebhookRetriesRaw = options.loginWebhookRetries ?? 3
+
+	const postLogoutWebhooks = options.postLogoutWebhooks ?? false
+	const logoutWebhookUrl = options.logoutWebhookUrl
+	const logoutWebhookSecret = options.logoutWebhookSecret
+	const logoutWebhookRetriesRaw = options.logoutWebhookRetries ?? 3
 	const signaturePath = options.signaturePath ?? "/passkey/data"
 	const timestampWindowMs = options.timestampWindowMs ?? 10 * 60 * 1000
 	const timestampFutureSkewMs = options.timestampFutureSkewMs ?? 2 * 60 * 1000
@@ -225,6 +230,14 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			"createCorePassServer: postLoginWebhooks=true requires store.getIdentityByUserId(userId)"
 		)
 	}
+	if (postLogoutWebhooks && !logoutWebhookUrl) {
+		throw new Error("createCorePassServer: postLogoutWebhooks=true requires logoutWebhookUrl")
+	}
+	if (postLogoutWebhooks && typeof options.store.getIdentityByUserId !== "function") {
+		throw new Error(
+			"createCorePassServer: postLogoutWebhooks=true requires store.getIdentityByUserId(userId)"
+		)
+	}
 
 	if (
 		!Number.isInteger(registrationWebhookRetriesRaw) ||
@@ -238,8 +251,16 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 	if (!Number.isInteger(loginWebhookRetriesRaw) || loginWebhookRetriesRaw < 1 || loginWebhookRetriesRaw > 10) {
 		throw new Error("createCorePassServer: loginWebhookRetries must be an integer between 1 and 10")
 	}
+	if (
+		!Number.isInteger(logoutWebhookRetriesRaw) ||
+		logoutWebhookRetriesRaw < 1 ||
+		logoutWebhookRetriesRaw > 10
+	) {
+		throw new Error("createCorePassServer: logoutWebhookRetries must be an integer between 1 and 10")
+	}
 	const registrationWebhookRetries = registrationWebhookRetriesRaw
 	const loginWebhookRetries = loginWebhookRetriesRaw
+	const logoutWebhookRetries = logoutWebhookRetriesRaw
 
 	const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 	const retryDelayMs = (attempt: number) => Math.min(2000, 200 * 2 ** (attempt - 1))
@@ -315,6 +336,20 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			retries: loginWebhookRetries,
 			payload,
 			...(loginWebhookSecret ? { secret: loginWebhookSecret } : {}),
+		})
+	}
+
+	async function postLogoutWebhook(args: { userId: string }): Promise<void> {
+		if (!postLogoutWebhooks || !logoutWebhookUrl) return
+		const identity = await options.store.getIdentityByUserId?.(args.userId)
+		if (!identity) return
+		const payload: Record<string, unknown> = { coreId: identity.coreId }
+		if (identity.refId) payload.refId = identity.refId
+		await postWebhook({
+			url: logoutWebhookUrl,
+			retries: logoutWebhookRetries,
+			payload,
+			...(logoutWebhookSecret ? { secret: logoutWebhookSecret } : {}),
 		})
 	}
 
@@ -643,5 +678,5 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		})
 	}
 
-	return { startRegistration, finishRegistration, enrichRegistration, postLoginWebhook }
+	return { startRegistration, finishRegistration, enrichRegistration, postLoginWebhook, postLogoutWebhook }
 }
