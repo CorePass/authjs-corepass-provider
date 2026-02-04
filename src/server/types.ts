@@ -103,7 +103,7 @@ export type CreateCorePassServerOptions = {
 
   /**
    * If true, finalization fails if the resulting email is missing.
-   * Defaults to true.
+   * Defaults to false.
    */
   emailRequired?: boolean
 
@@ -111,6 +111,41 @@ export type CreateCorePassServerOptions = {
    * TTL for pending registrations (seconds). Defaults to 300.
    */
   pendingTtlSeconds?: number
+
+  /**
+   * Enable `refId` support (capture it in start/finish/enrich and store it).
+   *
+   * Defaults to `false`.
+   */
+  enableRefId?: boolean
+
+  /**
+   * Webhook URL to POST after successful finalization.
+   *
+   * Payload: `{ coreId, refId? }`
+   */
+  webhookUrl?: string
+
+  /**
+   * Number of webhook delivery attempts for a single finalization.
+   *
+   * Retries happen when:
+   * - fetch throws (network error), or
+   * - response is non-2xx
+   *
+   * Allowed range: 1-10
+   * Default: 3
+   */
+  webhookRetries?: number
+
+  /**
+   * If enabled, POST a webhook after finalization:
+   * - always sends `coreId`
+   * - includes `refId` only if present
+   *
+   * Defaults to `false`.
+   */
+  postWebhooks?: boolean
 
   /**
    * If enabled, `finishRegistration` may finalize immediately when `coreId` is provided.

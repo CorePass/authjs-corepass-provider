@@ -81,38 +81,55 @@ function transportsToString(transports: unknown): string | null {
   return items.length ? items.join(",") : null
 }
 
+async function syntheticEmailFromCoreId(coreId: string): Promise<string> {
+  const bytes = new TextEncoder().encode(coreId)
+  const digest = await crypto.subtle.digest("SHA-256", bytes)
+  const hash = [...new Uint8Array(digest)]
+    .slice(0, 16)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+  // Keep local-part short (<64 chars) and deterministic
+  return `corepass+${hash}@corepass.invalid`
+}
+
 async function finalizeToAuthJs(
   options: CreateCorePassServerOptions,
   args: CorePassFinalizeArgs
 ): Promise<CorePassFinalizeResult> {
   const providerId = options.providerId ?? "corepass"
   const { adapter, store } = options
+  const enableRefId = options.enableRefId ?? false
 
   // 1) Find or create user by CoreID mapping
   let identity = await store.getIdentityByCoreId(args.coreId)
   let user: AdapterUser | null = identity ? await adapter.getUser(identity.userId) : null
 
   if (!identity || !user) {
-    const emailRequired = options.emailRequired ?? true
-    if (emailRequired && !args.email) {
-      throw new Error("Missing email")
-    }
+    const emailRequired = options.emailRequired ?? false
+    if (emailRequired && !args.email) throw new Error("Missing email")
+
+    const emailForUser = args.email ?? (await syntheticEmailFromCoreId(args.coreId))
 
     user = await adapter.createUser({
       // Most adapters will ignore provided id and generate their own.
       // CoreID is stored in corepass_identities instead.
-      email: args.email ?? "",
+      email: emailForUser,
       emailVerified: null,
       name: args.coreId.toUpperCase(),
       image: null,
     } as any)
 
-    identity = { coreId: args.coreId, userId: user.id, refId: args.refId ?? null }
+    const refId = enableRefId ? args.refId ?? crypto.randomUUID() : null
+    identity = { coreId: args.coreId, userId: user.id, refId }
     await store.upsertIdentity(identity)
   } else {
     // Keep refId if newly available
-    if (args.refId && !identity.refId) {
+    if (enableRefId && args.refId && !identity.refId) {
       identity = { ...identity, refId: args.refId }
+      await store.upsertIdentity(identity)
+    }
+    if (enableRefId && !identity.refId) {
+      identity = { ...identity, refId: crypto.randomUUID() }
       await store.upsertIdentity(identity)
     }
   }
@@ -169,7 +186,11 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
   const cookieName = "corepass.sid"
 
   const pendingTtlSeconds = options.pendingTtlSeconds ?? 300
-  const emailRequired = options.emailRequired ?? true
+  const emailRequired = options.emailRequired ?? false
+  const enableRefId = options.enableRefId ?? false
+  const postWebhooks = options.postWebhooks ?? false
+  const webhookUrl = options.webhookUrl
+  const webhookRetriesRaw = options.webhookRetries ?? 3
   const signaturePath = options.signaturePath ?? "/passkey/data"
   const timestampWindowMs = options.timestampWindowMs ?? 10 * 60 * 1000
   const timestampFutureSkewMs = options.timestampFutureSkewMs ?? 2 * 60 * 1000
@@ -178,10 +199,46 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 
   const sw = WebAuthn({}).simpleWebAuthn
 
+  if (postWebhooks && !webhookUrl) {
+    throw new Error("createCorePassServer: postWebhooks=true requires webhookUrl")
+  }
+
+  if (!Number.isInteger(webhookRetriesRaw) || webhookRetriesRaw < 1 || webhookRetriesRaw > 10) {
+    throw new Error("createCorePassServer: webhookRetries must be an integer between 1 and 10")
+  }
+  const webhookRetries = webhookRetriesRaw
+
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+  const retryDelayMs = (attempt: number) => Math.min(2000, 200 * 2 ** (attempt - 1))
+
+  async function maybePostWebhook(args: { coreId: string; refId: string | null }) {
+    if (!postWebhooks || !webhookUrl) return
+    const payload: Record<string, unknown> = { coreId: args.coreId }
+    if (args.refId) payload.refId = args.refId
+
+    for (let attempt = 1; attempt <= webhookRetries; attempt++) {
+      try {
+        const res = await fetch(webhookUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        })
+        if (res.ok) return
+      } catch {
+        // retry below
+      }
+
+      if (attempt < webhookRetries) {
+        await sleep(retryDelayMs(attempt))
+      }
+    }
+  }
+
   async function startRegistration(req: Request): Promise<Response> {
     const body = (await req.json().catch(() => null)) as any
     const email = parseEmail(body?.email)
-    const refId = typeof body?.refId === "string" ? body.refId.trim() || null : null
+    const refId =
+      enableRefId && typeof body?.refId === "string" ? body.refId.trim() || null : null
 
     if (body?.email !== undefined && body?.email !== null && !email) {
       return json(400, { ok: false, error: "Invalid email" })
@@ -242,7 +299,11 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
     if (!raw) return json(400, { ok: false, error: "Challenge expired" })
     await options.challengeStore.delete(`reg:${sid}`)
 
-    const saved = JSON.parse(raw) as { challenge: string; email: string | null; refId: string | null }
+    const saved = JSON.parse(raw) as {
+      challenge: string
+      email: string | null
+      refId: string | null
+    }
     const expectedChallenge = saved.challenge
 
     // Validate AAGUID allowlist (CorePass app gate)
@@ -307,12 +368,18 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
         credentialId: credentialIdBase64,
         authenticator,
         email: finalEmail,
-        refId: saved.refId,
+        refId: enableRefId ? saved.refId : null,
         o18y: parseBool(body?.o18y),
         o21y: parseBool(body?.o21y),
         kyc: parseBool(body?.kyc),
         kycDoc: typeof body?.kycDoc === "string" ? body.kycDoc.trim() || null : null,
         dataExpMinutes: parseDataExpMinutes(body?.dataExp),
+      })
+
+      const storedIdentity = await options.store.getIdentityByCoreId(coreIdFromBody)
+      await maybePostWebhook({
+        coreId: coreIdFromBody,
+        refId: enableRefId ? storedIdentity?.refId ?? null : null,
       })
 
       return json(200, { ok: true, finalized: true, userId: result.userId, coreId: coreIdFromBody })
@@ -330,7 +397,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
       credentialBackedUp: authenticator.credentialBackedUp,
       transports: authenticator.transports ?? null,
       email: saved.email,
-      refId: saved.refId,
+      refId: enableRefId ? saved.refId : null,
       aaguid,
       createdAt,
       expiresAt,
@@ -409,7 +476,8 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
     const kycFromBody = parseBool(userData?.kyc)
     const kycDocFromBody = typeof userData?.kycDoc === "string" ? userData.kycDoc.trim() || null : null
     const dataExpMinutes = parseDataExpMinutes(userData?.dataExp)
-    const refIdFromBody = typeof userData?.refId === "string" ? userData.refId.trim() || null : null
+    const refIdFromBody =
+      enableRefId && typeof userData?.refId === "string" ? userData.refId.trim() || null : null
 
     if (userData?.email !== undefined && userData?.email !== null && !emailFromBody) {
       return json(400, { ok: false, error: "Invalid email format" })
@@ -421,7 +489,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
       return json(400, { ok: false, error: "Missing email" })
     }
 
-    const refId = refIdFromBody || pending.refId || null
+    const refId = enableRefId ? refIdFromBody || pending.refId || null : null
 
     await options.store.deletePendingRegistrationByToken(pending.token)
 
@@ -447,6 +515,9 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
       kycDoc: kycDocFromBody,
       dataExpMinutes,
     })
+
+    const storedIdentity = await options.store.getIdentityByCoreId(coreId)
+    await maybePostWebhook({ coreId, refId: storedIdentity?.refId ?? null })
 
     return json(200, {
       ok: true,
