@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+    - name: README
+      url: https://github.com/CorePass/authjs-corepass-provider#readme
+      about: Read the docs and usage examples
+    - name: Security
+      url: https://authjs.dev/security#reporting-a-vulnerability
+      about: Please report security issues responsibly
