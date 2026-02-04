@@ -137,6 +137,18 @@ export type CreateCorePassServerOptions = {
 	webhookUrl?: string
 
 	/**
+	 * Webhook secret for HMAC signing. If set, webhook requests will include:
+	 * - `X-Webhook-Timestamp` (unix seconds)
+	 * - `X-Webhook-Signature` (`sha256=<hex>`)
+	 *
+	 * Signature input:
+	 * `timestamp + "\\n" + requestBody`
+	 *
+	 * If unset, webhooks are not signed.
+	 */
+	webhookSecret?: string
+
+	/**
    * Number of webhook delivery attempts for a single finalization.
    *
    * Retries happen when:
