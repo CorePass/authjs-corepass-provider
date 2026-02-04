@@ -46,4 +46,4 @@ It uses npm trusted publishing (`--provenance`) when configured on npm for this 
 If you find a security issue, please do not open a public issue.
 Follow the Auth.js security reporting guidance:
 
-- https://authjs.dev/security#reporting-a-vulnerability
+- [Auth.js security reporting guidance](https://authjs.dev/security#reporting-a-vulnerability)
