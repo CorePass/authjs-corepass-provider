@@ -195,10 +195,15 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 	const requireO21y = options.requireO21y ?? false
 	const requireKyc = options.requireKyc ?? false
 	const enableRefId = options.enableRefId ?? false
-	const postWebhooks = options.postWebhooks ?? false
-	const webhookUrl = options.webhookUrl
-	const webhookSecret = options.webhookSecret
-	const webhookRetriesRaw = options.webhookRetries ?? 3
+	const postRegistrationWebhooks = options.postRegistrationWebhooks ?? false
+	const registrationWebhookUrl = options.registrationWebhookUrl
+	const registrationWebhookSecret = options.registrationWebhookSecret
+	const registrationWebhookRetriesRaw = options.registrationWebhookRetries ?? 3
+
+	const postLoginWebhooks = options.postLoginWebhooks ?? false
+	const loginWebhookUrl = options.loginWebhookUrl
+	const loginWebhookSecret = options.loginWebhookSecret
+	const loginWebhookRetriesRaw = options.loginWebhookRetries ?? 3
 	const signaturePath = options.signaturePath ?? "/passkey/data"
 	const timestampWindowMs = options.timestampWindowMs ?? 10 * 60 * 1000
 	const timestampFutureSkewMs = options.timestampFutureSkewMs ?? 2 * 60 * 1000
@@ -207,14 +212,34 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 
 	const sw = WebAuthn({}).simpleWebAuthn
 
-	if (postWebhooks && !webhookUrl) {
-		throw new Error("createCorePassServer: postWebhooks=true requires webhookUrl")
+	if (postRegistrationWebhooks && !registrationWebhookUrl) {
+		throw new Error(
+			"createCorePassServer: postRegistrationWebhooks=true requires registrationWebhookUrl"
+		)
+	}
+	if (postLoginWebhooks && !loginWebhookUrl) {
+		throw new Error("createCorePassServer: postLoginWebhooks=true requires loginWebhookUrl")
+	}
+	if (postLoginWebhooks && typeof options.store.getIdentityByUserId !== "function") {
+		throw new Error(
+			"createCorePassServer: postLoginWebhooks=true requires store.getIdentityByUserId(userId)"
+		)
 	}
 
-	if (!Number.isInteger(webhookRetriesRaw) || webhookRetriesRaw < 1 || webhookRetriesRaw > 10) {
-		throw new Error("createCorePassServer: webhookRetries must be an integer between 1 and 10")
+	if (
+		!Number.isInteger(registrationWebhookRetriesRaw) ||
+		registrationWebhookRetriesRaw < 1 ||
+		registrationWebhookRetriesRaw > 10
+	) {
+		throw new Error(
+			"createCorePassServer: registrationWebhookRetries must be an integer between 1 and 10"
+		)
 	}
-	const webhookRetries = webhookRetriesRaw
+	if (!Number.isInteger(loginWebhookRetriesRaw) || loginWebhookRetriesRaw < 1 || loginWebhookRetriesRaw > 10) {
+		throw new Error("createCorePassServer: loginWebhookRetries must be an integer between 1 and 10")
+	}
+	const registrationWebhookRetries = registrationWebhookRetriesRaw
+	const loginWebhookRetries = loginWebhookRetriesRaw
 
 	const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 	const retryDelayMs = (attempt: number) => Math.min(2000, 200 * 2 ** (attempt - 1))
@@ -231,25 +256,27 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("")
 	}
 
-	async function maybePostWebhook(args: { coreId: string; refId: string | null }) {
-		if (!postWebhooks || !webhookUrl) return
-		const payload: Record<string, unknown> = { coreId: args.coreId }
-		if (args.refId) payload.refId = args.refId
-
+	async function postWebhook(args: {
+		url: string
+		secret?: string
+		retries: number
+		payload: Record<string, unknown>
+	}): Promise<void> {
+		const { url, secret, retries, payload } = args
 		const body = JSON.stringify(payload)
 
-		for (let attempt = 1; attempt <= webhookRetries; attempt++) {
+		for (let attempt = 1; attempt <= retries; attempt++) {
 			try {
 				const headers: Record<string, string> = { "content-type": "application/json" }
-				if (webhookSecret) {
+				if (secret) {
 					const ts = String(nowSec())
 					const signatureInput = `${ts}\n${body}`
-					const sigHex = await hmacSha256Hex(webhookSecret, signatureInput)
+					const sigHex = await hmacSha256Hex(secret, signatureInput)
 					headers["X-Webhook-Timestamp"] = ts
 					headers["X-Webhook-Signature"] = `sha256=${sigHex}`
 				}
 
-				const res = await fetch(webhookUrl, {
+				const res = await fetch(url, {
 					method: "POST",
 					headers,
 					body,
@@ -259,10 +286,36 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 				// retry below
 			}
 
-			if (attempt < webhookRetries) {
+			if (attempt < retries) {
 				await sleep(retryDelayMs(attempt))
 			}
 		}
+	}
+
+	async function maybePostRegistrationWebhook(args: { coreId: string; refId: string | null }): Promise<void> {
+		if (!postRegistrationWebhooks || !registrationWebhookUrl) return
+		const payload: Record<string, unknown> = { coreId: args.coreId }
+		if (args.refId) payload.refId = args.refId
+		await postWebhook({
+			url: registrationWebhookUrl,
+			retries: registrationWebhookRetries,
+			payload,
+			...(registrationWebhookSecret ? { secret: registrationWebhookSecret } : {}),
+		})
+	}
+
+	async function postLoginWebhook(args: { userId: string }): Promise<void> {
+		if (!postLoginWebhooks || !loginWebhookUrl) return
+		const identity = await options.store.getIdentityByUserId?.(args.userId)
+		if (!identity) return
+		const payload: Record<string, unknown> = { coreId: identity.coreId }
+		if (identity.refId) payload.refId = identity.refId
+		await postWebhook({
+			url: loginWebhookUrl,
+			retries: loginWebhookRetries,
+			payload,
+			...(loginWebhookSecret ? { secret: loginWebhookSecret } : {}),
+		})
 	}
 
 	async function startRegistration(req: Request): Promise<Response> {
@@ -408,7 +461,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			})
 
 			const storedIdentity = await options.store.getIdentityByCoreId(coreIdFromBody)
-			await maybePostWebhook({
+			await maybePostRegistrationWebhook({
 				coreId: coreIdFromBody,
 				refId: enableRefId ? storedIdentity?.refId ?? null : null,
 			})
@@ -580,7 +633,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		})
 
 		const storedIdentity = await options.store.getIdentityByCoreId(coreId)
-		await maybePostWebhook({ coreId, refId: storedIdentity?.refId ?? null })
+		await maybePostRegistrationWebhook({ coreId, refId: storedIdentity?.refId ?? null })
 
 		return json(200, {
 			ok: true,
@@ -590,5 +643,5 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		})
 	}
 
-	return { startRegistration, finishRegistration, enrichRegistration }
+	return { startRegistration, finishRegistration, enrichRegistration, postLoginWebhook }
 }

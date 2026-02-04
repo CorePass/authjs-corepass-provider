@@ -47,8 +47,8 @@ sequenceDiagram
   S->>DB: load+delete pending by credentialId
   S->>S: create/link Auth.js user+account+authenticator
   S->>DB: upsert CorePass identity/profile (provided_till, flags)
-  S->>S: (optional) POST webhook { coreId, refId? } (webhookRetries, default 3)
-  Note over S: If webhookSecret is set, include HMAC headers:\nX-Webhook-Timestamp + X-Webhook-Signature
+  S->>S: (optional) POST registration webhook { coreId, refId? } (registrationWebhookRetries, default 3)
+  Note over S: If registrationWebhookSecret is set, include HMAC headers:\nX-Webhook-Timestamp + X-Webhook-Signature
   S-->>A: 200 ok
 ```
 
@@ -71,6 +71,7 @@ sequenceDiagram
   Auth->>DB: getAuthenticator(credentialId) + verifyAuthenticationResponse()
   Auth->>DB: updateAuthenticatorCounter()
   Auth-->>B: session established
+  Note over Auth: (optional) POST login webhook { coreId, refId? } (loginWebhookRetries, default 3)
 ```
 
 ## Install
@@ -116,6 +117,15 @@ const corepass = createCorePassServer({
   allowImmediateFinalize: false,
 })
 
+// Optional: login webhook (call from Auth.js events.signIn)
+// events: {
+//   async signIn({ user, account }) {
+//     if (account?.provider === "corepass" && account?.type === "webauthn" && user?.id) {
+//       await corepass.postLoginWebhook({ userId: user.id })
+//     }
+//   }
+// }
+
 export async function POST(req: Request) {
   const url = new URL(req.url)
   if (url.pathname === "/webauthn/start") return corepass.startRegistration(req)
@@ -147,10 +157,16 @@ This adds:
 - **`requireO21y`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.o21y=true` or finalization is rejected. Not enforced for immediate-finalize.
 - **`requireKyc`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.kyc=true` or finalization is rejected. Not enforced for immediate-finalize.
 - **`enableRefId`**: defaults to `false`. When enabled, the server generates and stores a `refId` (UUIDv4) for the CoreID identity and can include it in webhooks. When disabled, no `refId` is generated or stored.
-- **`postWebhooks`**: defaults to `false`. When enabled, a webhook POST is sent after finalization with `{ coreId, refId? }`.
-- **`webhookUrl`**: required if `postWebhooks: true`.
-- **`webhookSecret`**: optional. If set, webhook requests are HMAC-signed (SHA-256) using `timestamp + "\\n" + body` and include `X-Webhook-Timestamp` (unix seconds) and `X-Webhook-Signature` (`sha256=<hex>`). If unset, webhooks are not signed.
-- **`webhookRetries`**: defaults to `3` (range `1-10`). Retries happen on non-2xx responses or network errors.
+- **Registration webhook options**:
+  - **`postRegistrationWebhooks`**: defaults to `false`.
+  - **`registrationWebhookUrl`**: required if `postRegistrationWebhooks: true`.
+  - **`registrationWebhookSecret`**: optional. If set, requests are HMAC-signed (SHA-256) using `timestamp + "\\n" + body` and include `X-Webhook-Timestamp` (unix seconds) and `X-Webhook-Signature` (`sha256=<hex>`).
+  - **`registrationWebhookRetries`**: defaults to `3` (range `1-10`). Retries happen on non-2xx responses or network errors.
+- **Login webhook options**:
+  - **`postLoginWebhooks`**: defaults to `false`.
+  - **`loginWebhookUrl`**: required if `postLoginWebhooks: true`.
+  - **`loginWebhookSecret`**: optional. Same signing format/headers as registration.
+  - **`loginWebhookRetries`**: defaults to `3` (range `1-10`). Retries happen on non-2xx responses or network errors.
 - **`pendingTtlSeconds`**: defaults to `600` (10 minutes). Pending registrations expire after this and are dropped.
 - **`timestampWindowMs`**: defaults to `600000` (10 minutes). Enrichment `timestamp` must be within this window.
 
@@ -191,7 +207,7 @@ This means the CorePass signer must sign the **same canonical JSON string** (alp
 | `kycDoc` | `string` | `PASSPORT` | Stored in `corepass_profiles.kyc_doc`. |
 | `dataExp` | `number` | `43829` | Minutes. Converted to `provided_till`. |
 
-`refId` is **not part of CorePass `/passkey/data`**. If you need an external correlation id, enable `enableRefId` and deliver it via your webhook (`postWebhooks`).
+`refId` is **not part of CorePass `/passkey/data`**. If you need an external correlation id, enable `enableRefId` and deliver it via your webhooks.
 
 ### `provided_till` calculation
 
