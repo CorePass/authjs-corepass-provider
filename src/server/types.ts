@@ -199,4 +199,3 @@ export type CorePassFinalizeResult = {
 	userId: string
 	account: AdapterAccount
 }
-
