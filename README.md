@@ -40,6 +40,8 @@ sequenceDiagram
   S->>DB: createPendingRegistration(credentialId, publicKey, counter, aaguid, email?)
   S-->>B: 200 { pending:true, enrichToken, credentialId }
 
+  A->>S: HEAD /passkey/data
+  S-->>A: 200 (enrichment available)
   A->>S: POST /passkey/data {coreId, credentialId, timestamp, userData} + X-Signature (Ed448)
   S->>S: validateCoreIdMainnet + timestamp window
   S->>S: verify Ed448 signature over canonical JSON
