@@ -3,6 +3,10 @@
     "version": "0.1.1",
     "description": "CorePass provider + pending registration/enrichment helpers for Auth.js (@auth/core)",
     "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/CorePass/authjs-corepass-provider.git"
+    },
     "type": "module",
     "sideEffects": false,
     "exports": {
