@@ -1,6 +1,6 @@
 {
     "name": "authjs-corepass-provider",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "description": "CorePass provider + pending registration/enrichment helpers for Auth.js (@auth/core)",
     "license": "MIT",
     "repository": {
@@ -22,6 +22,15 @@
     "files": [
         "dist",
         "db"
+    ],
+    "keywords": [
+        "auth",
+        "authjs",
+        "core",
+        "passkey",
+        "corepass",
+        "webauthn",
+        "passkey-provider"
     ],
     "scripts": {
         "build": "tsup",

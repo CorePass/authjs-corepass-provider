@@ -91,9 +91,10 @@ export type CreateCorePassServerOptions = {
 	 * AAGUID allowlist.
 	 *
 	 * - Default: CorePass AAGUID (`636f7265-7061-7373-6964-656e74696679`)
+	 * - Pass a string (single AAGUID) or an array of AAGUIDs
 	 * - Set to `false` to disable AAGUID checks (allow any authenticator).
 	 */
-	allowedAaguids?: string | false
+	allowedAaguids?: string | string[] | false
 
 	/**
 	 * WebAuthn algorithm preferences (COSE `alg` ids).
@@ -101,6 +102,15 @@ export type CreateCorePassServerOptions = {
 	 * Default: `[-257, -7, -8]` (RS256, ES256, Ed25519) like the injector.
 	 */
 	pubKeyCredAlgs?: number[]
+
+	/**
+	 * Registration options (start/finish). Defaults match passkey-friendly, privacy-friendly settings.
+	 */
+	attestationType?: "none" | "indirect" | "direct"
+	authenticatorAttachment?: "platform" | "cross-platform"
+	residentKey?: "discouraged" | "preferred" | "required"
+	userVerification?: "required" | "preferred" | "discouraged"
+	registrationTimeout?: number
 
 	/**
 	 * If true, finalization fails if the resulting email is missing.
