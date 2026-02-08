@@ -2,9 +2,9 @@
 
 CorePass provider + server helpers for Auth.js (`@auth/core`) implementing the **pending-by-default** registration flow:
 
-- Browser completes WebAuthn attestation (registration)
-- Server stores a **pending registration** (no Auth.js user/account/authenticator yet)
-- CorePass mobile app finalizes the account by calling **`POST /passkey/data`** with an **Ed448-signed** payload
+- CorePass first checks **`HEAD /passkey/data`**: **200** = enrichment available (pending mode), **404** = enrichment not available (e.g. `allowImmediateFinalize` enabled).
+- **If enrichment available (200):** browser does WebAuthn attestation via `POST /webauthn/start` and `POST /webauthn/finish` → server stores a **pending registration** → CorePass app finalizes by calling **`POST /passkey/data`** with an **Ed448-signed** payload.
+- **If enrichment not available (404):** browser completes attestation and finalizes in one go via `POST /webauthn/finish` with `coreId` (and optional data); no enrich step.
 
 ## What you get
 
@@ -13,6 +13,7 @@ CorePass provider + server helpers for Auth.js (`@auth/core`) implementing the *
   - `startRegistration(req)`
   - `finishRegistration(req)`
   - `enrichRegistration(req)` (your `/passkey/data`)
+  - `checkEnrichment()` (`HEAD /passkey/data`: 200 when enrichment available, 404 when `allowImmediateFinalize` is enabled)
 - **DB extension schema**: `db/corepass-schema.sql`
 
 ## Flows
@@ -28,6 +29,10 @@ sequenceDiagram
   participant DB as CorePass store
   actor A as CorePass app
 
+  A->>S: HEAD /passkey/data
+  S-->>A: 200 (enrichment available) or 404 (use immediate finalize in finish, not shown)
+  Note over A: If 200, use enrich flow below
+
   B->>S: POST /webauthn/start { email? }
   Note over B,S: Pending TTL default is 10 minutes (pendingTtlSeconds=600)
   S->>KV: put reg:sid {challenge,email} ttl
@@ -40,6 +45,7 @@ sequenceDiagram
   S-->>B: 200 { pending:true, enrichToken, credentialId }
 
   A->>S: POST /passkey/data {coreId, credentialId, timestamp, userData} + X-Signature (Ed448)
+  Note over A,S: Only when enrichment available (HEAD returned 200)
   S->>S: validateCoreIdMainnet + timestamp window
   S->>S: verify Ed448 signature over canonical JSON
   S->>DB: load+delete pending by credentialId
@@ -149,6 +155,12 @@ export async function POST(req: Request) {
   if (url.pathname === "/webauthn/finish") return corepass.finishRegistration(req)
   if (url.pathname === "/passkey/data") return corepass.enrichRegistration(req)
   return new Response("Not found", { status: 404 })
+}
+
+export async function HEAD(req: Request) {
+  const url = new URL(req.url)
+  if (url.pathname === "/passkey/data") return corepass.checkEnrichment()
+  return new Response(null, { status: 404 })
 }
 ```
 
@@ -369,7 +381,7 @@ This adds:
 
 - **`allowedAaguids`**: defaults to CorePass AAGUID `636f7265-7061-7373-6964-656e74696679`. Set to `false` to allow any authenticator.
 - **`pubKeyCredAlgs`**: defaults to `[-257, -7, -8]` (RS256, ES256, Ed25519).
-- **`allowImmediateFinalize`**: if enabled, `finishRegistration` may finalize immediately if `coreId` is provided in the browser payload. This is **disabled by default** because it weakens the CoreID ownership guarantee (the default flow requires the Ed448-signed `/passkey/data` request).
+- **`allowImmediateFinalize`**: if enabled, `finishRegistration` may finalize immediately if `coreId` is provided in the browser payload. This is **disabled by default** because it weakens the CoreID ownership guarantee (the default flow requires the Ed448-signed `/passkey/data` request). When enabled, `HEAD /passkey/data` (checkEnrichment) returns **404** (enrichment not available).
 - **`emailRequired`**: defaults to `false` (email can arrive later via `/passkey/data`). If no email is ever provided, the library creates the Auth.js user with a deterministic synthetic email and updates it once a real email is received.
 - **`requireO18y`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.o18y=true` or finalization is rejected. Not enforced for immediate-finalize.
 - **`requireO21y`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.o21y=true` or finalization is rejected. Not enforced for immediate-finalize.
