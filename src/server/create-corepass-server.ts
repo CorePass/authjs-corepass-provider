@@ -85,17 +85,6 @@ function transportsToString(transports: unknown): string | null {
 	return items.length ? items.join(",") : null
 }
 
-async function syntheticEmailFromCoreId(coreId: string): Promise<string> {
-	const bytes = new TextEncoder().encode(coreId)
-	const digest = await crypto.subtle.digest("SHA-256", bytes)
-	const hash = [...new Uint8Array(digest)]
-		.slice(0, 16)
-		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("")
-	// Keep local-part short (<64 chars) and deterministic
-	return `corepass+${hash}@corepass.invalid`
-}
-
 async function finalizeToAuthJs(
 	options: CreateCorePassServerOptions,
 	args: CorePassFinalizeArgs
@@ -112,12 +101,10 @@ async function finalizeToAuthJs(
 		const emailRequired = options.emailRequired ?? false
 		if (emailRequired && !args.email) throw new Error("Missing email")
 
-		const emailForUser = args.email ?? (await syntheticEmailFromCoreId(args.coreId))
-
 		user = await adapter.createUser({
 			// Most adapters will ignore provided id and generate their own.
 			// CoreID is stored in corepass_identities instead.
-			email: emailForUser,
+			email: args.email ?? undefined,
 			emailVerified: null,
 			name: args.coreId.toUpperCase(),
 			image: null,
@@ -372,6 +359,12 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			pendingTtlSeconds
 		)
 
+		const attestationType = options.attestationType ?? "none"
+		const authenticatorAttachment = options.authenticatorAttachment ?? "cross-platform"
+		const residentKey = options.residentKey ?? "preferred"
+		const userVerification = options.userVerification ?? "required"
+		const registrationTimeout = options.registrationTimeout ?? 60_000
+
 		const creationOptions = await sw.generateRegistrationOptions({
 			rpID: options.rpID,
 			rpName: options.rpName,
@@ -381,12 +374,12 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			challenge,
 			pubKeyCredParams: pubKeyCredAlgs.map((alg) => ({ alg, type: "public-key" })),
 			authenticatorSelection: {
-				authenticatorAttachment: "cross-platform",
-				residentKey: "preferred",
-				userVerification: "required",
+				authenticatorAttachment,
+				residentKey,
+				userVerification,
 			},
-			attestationType: "none",
-			timeout: 60_000,
+			attestationType,
+			timeout: registrationTimeout,
 			excludeCredentials: [],
 		})
 
@@ -436,6 +429,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			})
 		}
 
+		const requireUserVerification = options.userVerification !== "discouraged"
 		let verification: Awaited<ReturnType<(typeof sw)["verifyRegistrationResponse"]>>
 		try {
 			verification = await sw.verifyRegistrationResponse({
@@ -443,7 +437,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 				expectedChallenge,
 				expectedOrigin: options.expectedOrigin,
 				expectedRPID: options.rpID,
-				requireUserVerification: true,
+				requireUserVerification,
 			})
 		} catch {
 			return json(400, { ok: false, error: "Invalid registration response" })

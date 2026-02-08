@@ -379,10 +379,16 @@ This adds:
 
 ## Options
 
-- **`allowedAaguids`**: defaults to CorePass AAGUID `636f7265-7061-7373-6964-656e74696679`. Set to `false` to allow any authenticator.
+- **`allowedAaguids`**: defaults to CorePass AAGUID `636f7265-7061-7373-6964-656e74696679`. Pass a string or an array of AAGUIDs. Set to `false` to allow any authenticator.
 - **`pubKeyCredAlgs`**: defaults to `[-257, -7, -8]` (RS256, ES256, Ed25519).
+- **WebAuthn registration options** (optional overrides; defaults are passkey-friendly and privacy-friendly):
+  - **`attestationType`**: `"none"` (default), `"indirect"`, or `"direct"`.
+  - **`authenticatorAttachment`**: `"cross-platform"` (default) or `"platform"`.
+  - **`residentKey`**: `"preferred"` (default), `"required"`, or `"discouraged"`.
+  - **`userVerification`**: `"required"` (default), `"preferred"`, or `"discouraged"`.
+  - **`registrationTimeout`**: milliseconds; default `60000` (60 seconds).
 - **`allowImmediateFinalize`**: if enabled, `finishRegistration` may finalize immediately if `coreId` is provided in the browser payload. This is **disabled by default** because it weakens the CoreID ownership guarantee (the default flow requires the Ed448-signed `/passkey/data` request). When enabled, `HEAD /passkey/data` (checkEnrichment) returns **404** (enrichment not available).
-- **`emailRequired`**: defaults to `false` (email can arrive later via `/passkey/data`). If no email is ever provided, the library creates the Auth.js user with a deterministic synthetic email and updates it once a real email is received.
+- **`emailRequired`**: defaults to `false` (email can arrive later via `/passkey/data`). If no email is provided, the user is created with email undefined; when a real email is provided later it is updated.
 - **`requireO18y`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.o18y=true` or finalization is rejected. Not enforced for immediate-finalize.
 - **`requireO21y`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.o21y=true` or finalization is rejected. Not enforced for immediate-finalize.
 - **`requireKyc`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.kyc=true` or finalization is rejected. Not enforced for immediate-finalize.
@@ -435,7 +441,7 @@ This means the CorePass signer must sign the **same canonical JSON string** (alp
 
 | Field | Type | Example | Notes |
 | - | - | - | - |
-| `email` | `string` | `user@example.com` | Optional. If provided later, Auth.js user email is updated. |
+| `email` | `string` | `user@example.com` | Optional. If omitted, user email is left undefined; if provided later, Auth.js user email is updated. |
 | `o18y` | `boolean (or 0/1)` | `true` | Stored in `corepass_profiles.o18y`. |
 | `o21y` | `boolean (or 0/1)` | `false` | Stored in `corepass_profiles.o21y`. |
 | `kyc` | `boolean (or 0/1)` | `true` | Stored in `corepass_profiles.kyc`. |
@@ -443,6 +449,10 @@ This means the CorePass signer must sign the **same canonical JSON string** (alp
 | `dataExp` | `number` | `43829` | Minutes. Converted to `provided_till`. |
 
 `refId` is **not part of CorePass `/passkey/data`**. If you need an external correlation id, enable `enableRefId` and deliver it via your webhooks.
+
+### Email when not provided
+
+Email is **not required** unless you set **`emailRequired: true`**. When no email is supplied at finalization, the user is created with email **undefined**. If a real email is provided later (e.g. in `userData.email`), the user is updated via `adapter.updateUser`. Your adapter and database must allow missing/null email.
 
 ### `provided_till` calculation
 

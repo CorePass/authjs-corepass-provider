@@ -46,17 +46,16 @@ export function extractAaguidFromAttestationObject(attestationObjectB64Url?: str
 
 export function validateAaguidAllowlist(
 	aaguid: string | null,
-	allowedAaguids?: string | false
+	allowedAaguids?: string | string[] | false
 ): boolean {
 	if (allowedAaguids === false) return true
 	if (!allowedAaguids) return true
 	if (!aaguid) return false
 
 	const normalized = aaguid.trim().toLowerCase()
-	const allowed = allowedAaguids
-		.split(",")
-		.map((s) => s.trim().toLowerCase())
-		.filter(Boolean)
+	const allowed = Array.isArray(allowedAaguids)
+		? allowedAaguids.map((s) => String(s).trim().toLowerCase()).filter(Boolean)
+		: [allowedAaguids.trim().toLowerCase()].filter(Boolean)
 
 	return allowed.includes(normalized)
 }
