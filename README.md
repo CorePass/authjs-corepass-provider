@@ -13,7 +13,7 @@ CorePass provider + server helpers for Auth.js (`@auth/core`) implementing the *
   - `startRegistration(req)`
   - `finishRegistration(req)`
   - `enrichRegistration(req)` (your `/passkey/data`)
-  - `ping()` (health-check: `HEAD /passkey/data` → 200)
+  - `checkEnrichment()` (`HEAD /passkey/data`: 200 when enrichment available, 404 when `allowImmediateFinalize` is enabled)
 - **DB extension schema**: `db/corepass-schema.sql`
 
 ## Flows
@@ -41,6 +41,7 @@ sequenceDiagram
   S-->>B: 200 { pending:true, enrichToken, credentialId }
 
   A->>S: HEAD /passkey/data
+  Note over S: If allowImmediateFinalize: 404 (enrichment not available)
   S-->>A: 200 (enrichment available)
   A->>S: POST /passkey/data {coreId, credentialId, timestamp, userData} + X-Signature (Ed448)
   S->>S: validateCoreIdMainnet + timestamp window
@@ -156,7 +157,7 @@ export async function POST(req: Request) {
 
 export async function HEAD(req: Request) {
   const url = new URL(req.url)
-  if (url.pathname === "/passkey/data") return corepass.ping()
+  if (url.pathname === "/passkey/data") return corepass.checkEnrichment()
   return new Response(null, { status: 404 })
 }
 ```
@@ -378,7 +379,7 @@ This adds:
 
 - **`allowedAaguids`**: defaults to CorePass AAGUID `636f7265-7061-7373-6964-656e74696679`. Set to `false` to allow any authenticator.
 - **`pubKeyCredAlgs`**: defaults to `[-257, -7, -8]` (RS256, ES256, Ed25519).
-- **`allowImmediateFinalize`**: if enabled, `finishRegistration` may finalize immediately if `coreId` is provided in the browser payload. This is **disabled by default** because it weakens the CoreID ownership guarantee (the default flow requires the Ed448-signed `/passkey/data` request).
+- **`allowImmediateFinalize`**: if enabled, `finishRegistration` may finalize immediately if `coreId` is provided in the browser payload. This is **disabled by default** because it weakens the CoreID ownership guarantee (the default flow requires the Ed448-signed `/passkey/data` request). When enabled, `HEAD /passkey/data` (checkEnrichment) returns **404** (enrichment not available).
 - **`emailRequired`**: defaults to `false` (email can arrive later via `/passkey/data`). If no email is ever provided, the library creates the Auth.js user with a deterministic synthetic email and updates it once a real email is received.
 - **`requireO18y`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.o18y=true` or finalization is rejected. Not enforced for immediate-finalize.
 - **`requireO21y`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.o21y=true` or finalization is rejected. Not enforced for immediate-finalize.

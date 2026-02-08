@@ -678,9 +678,10 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		})
 	}
 
-	function ping(): Response {
-		return new Response(null, { status: 200 })
+	function checkEnrichment(): Response {
+		const available = !(options.allowImmediateFinalize ?? false)
+		return new Response(null, { status: available ? 200 : 404 })
 	}
 
-	return { startRegistration, finishRegistration, enrichRegistration, postLoginWebhook, postLogoutWebhook, ping }
+	return { startRegistration, finishRegistration, enrichRegistration, postLoginWebhook, postLogoutWebhook, checkEnrichment }
 }
