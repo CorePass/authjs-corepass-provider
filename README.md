@@ -13,6 +13,7 @@ CorePass provider + server helpers for Auth.js (`@auth/core`) implementing the *
   - `startRegistration(req)`
   - `finishRegistration(req)`
   - `enrichRegistration(req)` (your `/passkey/data`)
+  - `ping()` (health-check: `HEAD /passkey/data` → 200)
 - **DB extension schema**: `db/corepass-schema.sql`
 
 ## Flows
@@ -149,6 +150,12 @@ export async function POST(req: Request) {
   if (url.pathname === "/webauthn/finish") return corepass.finishRegistration(req)
   if (url.pathname === "/passkey/data") return corepass.enrichRegistration(req)
   return new Response("Not found", { status: 404 })
+}
+
+export async function HEAD(req: Request) {
+  const url = new URL(req.url)
+  if (url.pathname === "/passkey/data") return corepass.ping()
+  return new Response(null, { status: 404 })
 }
 ```
 

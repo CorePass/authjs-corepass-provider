@@ -678,5 +678,9 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		})
 	}
 
-	return { startRegistration, finishRegistration, enrichRegistration, postLoginWebhook, postLogoutWebhook }
+	function ping(): Response {
+		return new Response(null, { status: 200 })
+	}
+
+	return { startRegistration, finishRegistration, enrichRegistration, postLoginWebhook, postLogoutWebhook, ping }
 }
