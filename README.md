@@ -2,9 +2,9 @@
 
 CorePass provider + server helpers for Auth.js (`@auth/core`) implementing the **pending-by-default** registration flow:
 
-- Browser completes WebAuthn attestation (registration)
-- Server stores a **pending registration** (no Auth.js user/account/authenticator yet)
-- CorePass mobile app finalizes the account by calling **`POST /passkey/data`** with an **Ed448-signed** payload
+- CorePass first checks **`HEAD /passkey/data`**: **200** = enrichment available (pending mode), **404** = enrichment not available (e.g. `allowImmediateFinalize` enabled).
+- **If enrichment available (200):** browser does WebAuthn attestation via `POST /webauthn/start` and `POST /webauthn/finish` → server stores a **pending registration** → CorePass app finalizes by calling **`POST /passkey/data`** with an **Ed448-signed** payload.
+- **If enrichment not available (404):** browser completes attestation and finalizes in one go via `POST /webauthn/finish` with `coreId` (and optional data); no enrich step.
 
 ## What you get
 
@@ -29,6 +29,10 @@ sequenceDiagram
   participant DB as CorePass store
   actor A as CorePass app
 
+  A->>S: HEAD /passkey/data
+  S-->>A: 200 (enrichment available) or 404 (use immediate finalize in finish, not shown)
+  Note over A: If 200, use enrich flow below
+
   B->>S: POST /webauthn/start { email? }
   Note over B,S: Pending TTL default is 10 minutes (pendingTtlSeconds=600)
   S->>KV: put reg:sid {challenge,email} ttl
@@ -40,10 +44,8 @@ sequenceDiagram
   S->>DB: createPendingRegistration(credentialId, publicKey, counter, aaguid, email?)
   S-->>B: 200 { pending:true, enrichToken, credentialId }
 
-  A->>S: HEAD /passkey/data
-  Note over S: If allowImmediateFinalize: 404 (enrichment not available)
-  S-->>A: 200 (enrichment available)
   A->>S: POST /passkey/data {coreId, credentialId, timestamp, userData} + X-Signature (Ed448)
+  Note over A,S: Only when enrichment available (HEAD returned 200)
   S->>S: validateCoreIdMainnet + timestamp window
   S->>S: verify Ed448 signature over canonical JSON
   S->>DB: load+delete pending by credentialId
