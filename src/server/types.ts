@@ -122,6 +122,12 @@ export type CreateCorePassServerOptions = {
 	registrationTimeout?: number
 
 	/**
+	 * Optional list of authenticator transports to request (e.g. ["internal", "hybrid"]).
+	 * WebAuthn: "usb" | "nfc" | "ble" | "internal" | "hybrid".
+	 */
+	transports?: ("usb" | "nfc" | "ble" | "internal" | "hybrid")[]
+
+	/**
 	 * If true, finalization fails if the resulting email is missing.
 	 * Defaults to false.
 	 */

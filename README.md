@@ -402,6 +402,13 @@ This adds:
   - **`residentKey`**: `"preferred"` (default), `"required"`, or `"discouraged"`.
   - **`userVerification`**: `"required"` (default), `"preferred"`, or `"discouraged"`.
   - **`registrationTimeout`**: milliseconds; default `60000` (60 seconds).
+  - **`transports`**: optional array of authenticator transports to request. **Default:** omitted (not set); the browser decides which authenticators to offer. Sent to the client in the registration options; the browser uses it as a **hint** for which kinds of authenticators to prefer or offer. The client is not required to restrict to these—it may still show other authenticators. Each value means:
+    - **`internal`**: authenticator is bound to the device (e.g. built-in Touch ID / Face ID, Windows Hello). Typically shown as “this device” or “phone / laptop built-in”.
+    - **`hybrid`**: can use a separate device over a combination of transport and proximity (e.g. phone as passkey for a desktop). Often shown as “other device” or “phone” when signing in elsewhere.
+    - **`usb`**: security key over USB. User plugs in a hardware key.
+    - **`nfc`**: security key over NFC. User taps a hardware key to the device.
+    - **`ble`**: security key over Bluetooth Low Energy. User pairs/taps a BLE key.
+    If omitted, the browser chooses which authenticators to offer; the authenticator may still report its transports in the attestation (stored for later sign-in hints).
 - **`allowImmediateFinalize`**: if enabled, `finishRegistration` may finalize immediately if `coreId` is provided in the browser payload. This is **disabled by default** because it weakens the CoreID ownership guarantee (the default flow requires the Ed448-signed `/passkey/data` request). When enabled, `HEAD /passkey/data` (checkEnrichment) returns **404** (enrichment not available). When **true**, **`challengeStore`** may be omitted (see **`secret`**).
 - **`secret`**: required when **`allowImmediateFinalize`** is true and **`challengeStore`** is not provided. Used to sign the cookie that carries the WebAuthn challenge between start and finish (no server-side challenge store needed).
 - **`emailRequired`**: defaults to `false` (email can arrive later via `/passkey/data`). If no email is provided, the user is created with email undefined; when a real email is provided later it is updated.
