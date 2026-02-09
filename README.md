@@ -83,8 +83,8 @@ sequenceDiagram
 ## Requirements
 
 - **Node.js** 18+ (ESM, native `crypto`).
-- **Auth.js**: `@auth/core` (peer dependency). Use a version compatible with the provider (e.g. `^0.34.3`).
-- **SimpleWebAuthn** (server) **v10+** required. The package uses `generateRegistrationOptions` with a `Uint8Array` userID; this is provided by `@auth/core` when it depends on `@simplewebauthn/server` v10+.
+- **Auth.js**: `@auth/core` (peer dependency) **>=0.34.3** (e.g. 0.34.x, 0.41.x).
+- **SimpleWebAuthn** (server) **v10+** required (v13 recommended). The package uses `generateRegistrationOptions` with a `Uint8Array` userID. This package’s **overrides** force `@simplewebauthn/browser` and `@simplewebauthn/server` to **^13.0.0** so that even if `@auth/core` declares an older range, installs use the latest.
 - **Frontend**: `@simplewebauthn/browser` in the app that calls your WebAuthn endpoints (e.g. for `startRegistration` / `finishRegistration`).
 
 The package brings in its own runtime dependencies (e.g. `@noble/curves`, `cbor-x`, `blockchain-wallet-validator`) for Ed448 verification and CBOR; you do not install those yourself.
