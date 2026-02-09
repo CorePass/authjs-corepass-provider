@@ -415,6 +415,19 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		const residentKey = options.residentKey ?? "preferred"
 		const userVerification = options.userVerification ?? "required"
 		const registrationTimeout = options.registrationTimeout ?? 60_000
+		const transports = options.transports && options.transports.length > 0 ? options.transports : undefined
+
+		const authenticatorSelection: {
+			authenticatorAttachment: "platform" | "cross-platform"
+			residentKey: "discouraged" | "preferred" | "required"
+			userVerification: "required" | "preferred" | "discouraged"
+			transports?: ("usb" | "nfc" | "ble" | "internal" | "hybrid")[]
+		} = {
+			authenticatorAttachment,
+			residentKey,
+			userVerification,
+		}
+		if (transports) authenticatorSelection.transports = transports
 
 		const creationOptions = await sw.generateRegistrationOptions({
 			rpID: options.rpID,
@@ -424,11 +437,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			userDisplayName: email ?? "CorePass User",
 			challenge,
 			pubKeyCredParams: pubKeyCredAlgs.map((alg) => ({ alg, type: "public-key" })),
-			authenticatorSelection: {
-				authenticatorAttachment,
-				residentKey,
-				userVerification,
-			},
+			authenticatorSelection,
 			attestationType,
 			timeout: registrationTimeout,
 			excludeCredentials: [],
