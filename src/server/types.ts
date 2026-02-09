@@ -71,11 +71,20 @@ export type CreateCorePassServerOptions = {
 	/**
 	 * CorePass extension store (pending registrations + CoreID mapping + profile).
 	 */
-		store: CorePassStore
+	store: CorePassStore
+
 	/**
 	 * Store for short-lived WebAuthn challenges (KV/Redis/DB/etc).
+	 * Optional when **allowImmediateFinalize** is true: if omitted, the challenge is carried in a
+	 * signed cookie instead (you must set **secret** for signing).
 	 */
-	challengeStore: CorePassChallengeStore
+	challengeStore?: CorePassChallengeStore
+
+	/**
+	 * Secret for signing the challenge cookie when **allowImmediateFinalize** is true and
+	 * **challengeStore** is not provided. Required in that case.
+	 */
+	secret?: string
 
 	rpID: string
 	rpName: string

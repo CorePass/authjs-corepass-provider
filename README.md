@@ -133,13 +133,14 @@ const corepass = createCorePassServer({
   // - postgresCorePassStore(pg) for Postgres (node-postgres, etc)
   // - supabaseCorePassStore(supabase) for Supabase client
   store: /* CorePassStore implementation */,
-  challengeStore: /* CorePassChallengeStore implementation (KV/Redis/etc) */,
+  challengeStore: /* CorePassChallengeStore (optional if allowImmediateFinalize: true; then set secret) */,
   rpID: "example.com",
   rpName: "Example",
   expectedOrigin: "https://example.com",
 
   // default: pending registrations are required
   allowImmediateFinalize: false,
+  // secret: required when allowImmediateFinalize is true and challengeStore is omitted (challenge in signed cookie)
 })
 
 // Optional: login webhook (call from Auth.js events.signIn)
@@ -192,6 +193,8 @@ This does **not** create an Auth.js adapter for you (adapters are separate packa
 store uses the same DB client you pass in.
 
 ## `challengeStore` (what it is, and what it supports)
+
+When **allowImmediateFinalize** is **true**, `challengeStore` is **optional**: if omitted, the WebAuthn challenge is carried in a **signed cookie** instead (you must set **`secret`** for signing). When **allowImmediateFinalize** is false, `challengeStore` is **required**.
 
 `challengeStore` is **not an Auth.js provider** and it is **not tied to WebAuthn/Passkey provider IDs**.
 It’s a minimal storage interface used by this package’s custom endpoints to persist the WebAuthn challenge
@@ -399,7 +402,8 @@ This adds:
   - **`residentKey`**: `"preferred"` (default), `"required"`, or `"discouraged"`.
   - **`userVerification`**: `"required"` (default), `"preferred"`, or `"discouraged"`.
   - **`registrationTimeout`**: milliseconds; default `60000` (60 seconds).
-- **`allowImmediateFinalize`**: if enabled, `finishRegistration` may finalize immediately if `coreId` is provided in the browser payload. This is **disabled by default** because it weakens the CoreID ownership guarantee (the default flow requires the Ed448-signed `/passkey/data` request). When enabled, `HEAD /passkey/data` (checkEnrichment) returns **404** (enrichment not available).
+- **`allowImmediateFinalize`**: if enabled, `finishRegistration` may finalize immediately if `coreId` is provided in the browser payload. This is **disabled by default** because it weakens the CoreID ownership guarantee (the default flow requires the Ed448-signed `/passkey/data` request). When enabled, `HEAD /passkey/data` (checkEnrichment) returns **404** (enrichment not available). When **true**, **`challengeStore`** may be omitted (see **`secret`**).
+- **`secret`**: required when **`allowImmediateFinalize`** is true and **`challengeStore`** is not provided. Used to sign the cookie that carries the WebAuthn challenge between start and finish (no server-side challenge store needed).
 - **`emailRequired`**: defaults to `false` (email can arrive later via `/passkey/data`). If no email is provided, the user is created with email undefined; when a real email is provided later it is updated.
 - **`requireO18y`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.o18y=true` or finalization is rejected. Not enforced for immediate-finalize.
 - **`requireO21y`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.o21y=true` or finalization is rejected. Not enforced for immediate-finalize.

@@ -1,7 +1,7 @@
 import WebAuthn from "@auth/core/providers/webauthn"
 import type { AdapterAccount, AdapterAuthenticator, AdapterUser } from "@auth/core/adapters"
 
-import { bytesToBase64, bytesToBase64Url, normalizeCredentialId } from "./base64.js"
+import { base64UrlToBytes, bytesToBase64, bytesToBase64Url, normalizeCredentialId } from "./base64.js"
 import { canonicalizeForSignature, canonicalizeJSON } from "./canonical-json.js"
 import { parseCookies, serializeCookie } from "./cookies.js"
 import { deriveEd448PublicKeyFromCoreId, validateCoreIdMainnet } from "./coreid.js"
@@ -201,6 +201,20 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 	const timestampFutureSkewMs = options.timestampFutureSkewMs ?? 2 * 60 * 1000
 	const allowedAaguids = options.allowedAaguids ?? COREPASS_DEFAULT_AAGUID
 	const pubKeyCredAlgs = options.pubKeyCredAlgs ?? [-257, -7, -8]
+	const allowImmediateFinalize = options.allowImmediateFinalize ?? false
+	const challengeStore = options.challengeStore ?? null
+	const useChallengeCookie = allowImmediateFinalize && !challengeStore
+	if (!challengeStore && !useChallengeCookie) {
+		throw new Error(
+			"createCorePassServer: challengeStore is required when allowImmediateFinalize is not true"
+		)
+	}
+	if (useChallengeCookie && !options.secret) {
+		throw new Error(
+			"createCorePassServer: secret is required when allowImmediateFinalize is true and challengeStore is not provided (challenge is stored in a signed cookie)"
+		)
+	}
+	const challengeCookieSecret = useChallengeCookie ? options.secret! : ""
 
 	const sw = WebAuthn({}).simpleWebAuthn
 
@@ -262,6 +276,41 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		)
 		const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message))
 		return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("")
+	}
+
+	async function signChallengeCookie(payload: { sid: string; challenge: string; email: string | null; refId: string | null }): Promise<string> {
+		const b64 = bytesToBase64Url(new TextEncoder().encode(JSON.stringify(payload)))
+		const sig = await hmacSha256Hex(challengeCookieSecret, b64)
+		return `${b64}.${sig}`
+	}
+
+	async function verifyChallengeCookie(value: string): Promise<{ challenge: string; email: string | null; refId: string | null } | null> {
+		const dot = value.indexOf(".")
+		if (dot <= 0) return null
+		const b64 = value.slice(0, dot)
+		const sig = value.slice(dot + 1)
+		const expectedSig = await hmacSha256Hex(challengeCookieSecret, b64)
+		if (sig !== expectedSig) return null
+		try {
+			const json = new TextDecoder().decode(base64UrlToBytes(b64))
+			const payload = JSON.parse(json) as { sid?: string; challenge?: string; email?: string | null; refId?: string | null }
+			if (typeof payload.challenge !== "string") return null
+			return {
+				challenge: payload.challenge,
+				email: payload.email ?? null,
+				refId: payload.refId ?? null,
+			}
+		} catch {
+			return null
+		}
+	}
+
+	function withClearChallengeCookieIfUsed(res: Response): Response {
+		if (!useChallengeCookie) return res
+		const clearCookie = serializeCookie(cookieName, "", { path: "/", maxAge: 0 })
+		const headers = new Headers(res.headers)
+		headers.append("set-cookie", clearCookie)
+		return new Response(res.body, { status: res.status, headers })
 	}
 
 	async function postWebhook(args: {
@@ -353,11 +402,13 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		const challenge = randomChallenge()
 		const sid = crypto.randomUUID()
 
-		await options.challengeStore.put(
-			`reg:${sid}`,
-			JSON.stringify({ challenge, email, refId }),
-			pendingTtlSeconds
-		)
+		if (challengeStore) {
+			await challengeStore.put(
+				`reg:${sid}`,
+				JSON.stringify({ challenge, email, refId }),
+				pendingTtlSeconds
+			)
+		}
 
 		const attestationType = options.attestationType ?? "none"
 		const authenticatorAttachment = options.authenticatorAttachment ?? "cross-platform"
@@ -383,50 +434,52 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			excludeCredentials: [],
 		})
 
-		return json(
-			200,
-			creationOptions,
-			{
-				"set-cookie": serializeCookie(cookieName, sid, {
-					httpOnly: true,
-					secure: true,
-					sameSite: "Lax",
-					path: "/",
-					maxAge: pendingTtlSeconds,
-				}),
-			}
-		)
+		const cookieValue = challengeStore
+			? sid
+			: await signChallengeCookie({ sid, challenge, email, refId })
+		return json(200, creationOptions, {
+			"set-cookie": serializeCookie(cookieName, cookieValue, {
+				httpOnly: true,
+				secure: true,
+				sameSite: "Lax",
+				path: "/",
+				maxAge: pendingTtlSeconds,
+			}),
+		})
 	}
 
 	async function finishRegistration(req: Request): Promise<Response> {
 		const body = (await req.json().catch(() => null)) as any
 		const attestation = body?.attestation as any
-		if (!attestation) return json(400, { ok: false, error: "Bad request" })
+		if (!attestation) return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "Bad request" }))
 
 		const cookies = parseCookies(req.headers.get("cookie"))
-		const sid = cookies[cookieName]
-		if (!sid) return json(400, { ok: false, error: "No session" })
+		const cookieVal = cookies[cookieName]
+		if (!cookieVal) return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "No session" }))
 
-		const raw = await options.challengeStore.get(`reg:${sid}`)
-		if (!raw) return json(400, { ok: false, error: "Challenge expired" })
-		await options.challengeStore.delete(`reg:${sid}`)
-
-		const saved = JSON.parse(raw) as {
-			challenge: string
-			email: string | null
-			refId: string | null
+		let saved: { challenge: string; email: string | null; refId: string | null }
+		if (challengeStore) {
+			const sid = cookieVal
+			const raw = await challengeStore.get(`reg:${sid}`)
+			if (!raw) return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "Challenge expired" }))
+			await challengeStore.delete(`reg:${sid}`)
+			saved = JSON.parse(raw) as { challenge: string; email: string | null; refId: string | null }
+		} else {
+			const payload = await verifyChallengeCookie(cookieVal)
+			if (!payload) return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "Challenge expired or invalid" }))
+			saved = payload
 		}
 		const expectedChallenge = saved.challenge
 
 		// Validate AAGUID allowlist (CorePass app gate)
 		const aaguid = extractAaguidFromAttestationObject((attestation as any)?.response?.attestationObject)
 		if (!validateAaguidAllowlist(aaguid, allowedAaguids)) {
-			return json(400, {
+			return withClearChallengeCookieIfUsed(json(400, {
 				ok: false,
 				error: "AAGUID not allowed",
 				aaguid,
 				allowedAaguids: allowedAaguids ?? null,
-			})
+			}))
 		}
 
 		const requireUserVerification = options.userVerification !== "discouraged"
@@ -440,11 +493,11 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 				requireUserVerification,
 			})
 		} catch {
-			return json(400, { ok: false, error: "Invalid registration response" })
+			return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "Invalid registration response" }))
 		}
 
 		if (!verification.verified || !verification.registrationInfo) {
-			return json(400, { ok: false, error: "Registration not verified" })
+			return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "Registration not verified" }))
 		}
 
 		const credentialIdBase64 = bytesToBase64(verification.registrationInfo.credentialID)
@@ -466,15 +519,15 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 
 		if (allowImmediateFinalize && coreIdFromBody) {
 			if (!validateCoreIdMainnet(coreIdFromBody)) {
-				return json(400, { ok: false, error: "Invalid Core ID (mainnet)" })
+				return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "Invalid Core ID (mainnet)" }))
 			}
 
 			const emailFromBody = parseEmail(body?.email)
 			if (body?.email !== undefined && body?.email !== null && !emailFromBody) {
-				return json(400, { ok: false, error: "Invalid email" })
+				return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "Invalid email" }))
 			}
 			const finalEmail = emailFromBody || saved.email || null
-			if (emailRequired && !finalEmail) return json(400, { ok: false, error: "Missing email" })
+			if (emailRequired && !finalEmail) return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "Missing email" }))
 
 			const result = await finalizeToAuthJs(options, {
 				coreId: coreIdFromBody,
@@ -495,7 +548,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 				refId: enableRefId ? storedIdentity?.refId ?? null : null,
 			})
 
-			return json(200, { ok: true, finalized: true, userId: result.userId, coreId: coreIdFromBody })
+			return withClearChallengeCookieIfUsed(json(200, { ok: true, finalized: true, userId: result.userId, coreId: coreIdFromBody }))
 		}
 
 		const token = crypto.randomUUID()
@@ -517,12 +570,12 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		}
 		await options.store.createPendingRegistration(pending)
 
-		return json(200, {
+		return withClearChallengeCookieIfUsed(json(200, {
 			ok: true,
 			pending: true,
 			enrichToken: token,
 			credentialId: credentialIdBase64,
-		})
+		}))
 	}
 
 	async function enrichRegistration(req: Request): Promise<Response> {
