@@ -1,6 +1,8 @@
 # authjs-corepass-provider
 
-CorePass provider + server helpers for Auth.js (`@auth/core`) implementing the **pending-by-default** registration flow:
+CorePass provider and server helpers for [Auth.js](https://authjs.dev/) (`@auth/core`). This package adds a WebAuthn/Passkey provider (CorePass) and the **pending-by-default** registration flow to your app. You install it in the same project where you use Auth.js and mount the provided handlers on your routes.
+
+**Flow in short:**
 
 - CorePass first checks **`HEAD /passkey/data`**: **200** = enrichment available (pending mode), **404** = enrichment not available (e.g. `allowImmediateFinalize` enabled).
 - **If enrichment available (200):** browser does WebAuthn attestation via `POST /webauthn/start` and `POST /webauthn/finish` → server stores a **pending registration** → CorePass app finalizes by calling **`POST /passkey/data`** with an **Ed448-signed** payload.
@@ -78,16 +80,26 @@ sequenceDiagram
   Note over Auth: (optional) POST login webhook { coreId, refId? } (loginWebhookRetries, default 3)
 ```
 
+## Requirements
+
+- **Node.js** 18+ (ESM, native `crypto`).
+- **Auth.js**: `@auth/core` (peer dependency). Use a version compatible with the provider (e.g. `^0.34.3`).
+- **SimpleWebAuthn** (server) **v10+** required. The package uses `generateRegistrationOptions` with a `Uint8Array` userID; this is provided by `@auth/core` when it depends on `@simplewebauthn/server` v10+.
+- **Frontend**: `@simplewebauthn/browser` in the app that calls your WebAuthn endpoints (e.g. for `startRegistration` / `finishRegistration`).
+
+The package brings in its own runtime dependencies (e.g. `@noble/curves`, `cbor-x`, `blockchain-wallet-validator`) for Ed448 verification and CBOR; you do not install those yourself.
+
 ## Install
 
 ```bash
 npm install authjs-corepass-provider
 ```
 
-You also need:
+Install peer and frontend deps in your app if not already present:
 
-- `@auth/core` (peer dependency)
-- `@simplewebauthn/browser` in your frontend
+```bash
+npm install @auth/core @simplewebauthn/browser
+```
 
 ## Auth.js configuration
 

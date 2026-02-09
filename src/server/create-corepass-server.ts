@@ -368,7 +368,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		const creationOptions = await sw.generateRegistrationOptions({
 			rpID: options.rpID,
 			rpName: options.rpName,
-			userID: bytesToBase64Url(randomBytes(32)),
+			userID: randomBytes(32),
 			userName: email ?? "CorePass",
 			userDisplayName: email ?? "CorePass User",
 			challenge,
