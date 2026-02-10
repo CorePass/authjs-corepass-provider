@@ -27,8 +27,7 @@ sequenceDiagram
   autonumber
   actor B as Browser
   participant S as Your backend
-  participant KV as Challenge store
-  participant DB as CorePass store
+  participant Adapter as Adapter (CorePass store + pending)
   actor A as CorePass app
 
   A->>S: HEAD /passkey/data
@@ -36,23 +35,23 @@ sequenceDiagram
   Note over A: If 200, use enrich flow below
 
   B->>S: POST /webauthn/start { email? }
-  Note over B,S: Pending state: db (adapter setPending/consumePending or VerificationToken) or cookie
-  S->>S: backend.set(pendingKey, {challenge,email,refId})
+  Note over B,S: Pending: adapter setPending/consumePending or cookie (no separate challenge store)
+  S->>Adapter: setPending(pendingKey, …)
   S-->>B: 200 { options: CreationOptions, pendingKey?, pendingToken? } + Set-Cookie (if cookie strategy)
   B->>B: navigator.credentials.create(options)
   B->>S: POST /webauthn/finish { attestation, pendingKey, pendingToken?, email? }
-  S->>S: backend.consume(pendingKey) / consumeWithToken(pendingKey, pendingToken)
+  S->>Adapter: consumePending(pendingKey) / consumeWithToken(…)
   S->>S: verifyRegistrationResponse()
-  S->>S: backend.set(credentialId, pendingRegPayload)
+  S->>Adapter: setPending(credentialId, pendingRegPayload)
   S-->>B: 200 { pending:true, credentialId, enrichToken? }
 
   A->>S: POST /passkey/data {coreId, credentialId, timestamp, userData} + X-Signature (Ed448)
   Note over A,S: Only when enrichment available (HEAD returned 200)
   S->>S: validateCoreIdMainnet + timestamp window
   S->>S: verify Ed448 signature over canonical JSON
-  S->>S: backend.consume(credentialId) / consumeWithToken(credentialId, enrichToken)
-  S->>S: create/link Auth.js user+account+authenticator (adapter)
-  S->>S: adapter.upsertIdentity / adapter.upsertProfile (provided_till, flags)
+  S->>Adapter: consumePending(credentialId) / consumeWithToken(…)
+  S->>Adapter: create/link Auth.js user+account+authenticator
+  S->>Adapter: upsertIdentity / upsertProfile (provided_till, flags)
   S->>S: (optional) POST registration webhook { coreId, refId? } (registrationWebhookRetries, default 3)
   Note over S: If registrationWebhookSecret is set, include HMAC headers:\nX-Webhook-Timestamp + X-Webhook-Signature
   S-->>A: 200 ok
@@ -67,15 +66,15 @@ sequenceDiagram
   autonumber
   actor B as Browser
   participant Auth as Auth.js (@auth/core)
-  participant DB as Adapter DB
+  participant Adapter as Adapter (any supported DB)
 
   B->>Auth: GET /auth/webauthn-options?action=authenticate (provider=corepass)
-  Auth->>DB: listAuthenticatorsByUserId (optional) / challenge cookie
+  Auth->>Adapter: listAuthenticatorsByUserId (optional) / challenge cookie
   Auth-->>B: 200 RequestOptions + challenge cookie
   B->>B: navigator.credentials.get()
   B->>Auth: POST /auth/callback/corepass { action:"authenticate", data }
-  Auth->>DB: getAuthenticator(credentialId) + verifyAuthenticationResponse()
-  Auth->>DB: updateAuthenticatorCounter()
+  Auth->>Adapter: getAuthenticator(credentialId) + verifyAuthenticationResponse()
+  Auth->>Adapter: updateAuthenticatorCounter()
   Auth-->>B: session established
   Note over Auth: (optional) POST login webhook { coreId, refId? } (loginWebhookRetries, default 3)
 ```
