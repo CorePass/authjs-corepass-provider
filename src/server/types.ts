@@ -97,6 +97,8 @@ export type CreateCorePassServerOptions = {
 	defaultUserName?: string
 	/** WebAuthn user display name fallback order: this value, then email from request, then "CorePass User". */
 	defaultUserDisplayName?: string
+	/** Default passkey user id (32 or 64 bytes, base64/base64url). If set, used when the request does not send userId. If neither request nor this is set, server generates 32 random bytes. */
+	defaultUserId?: string
 
 	signaturePath?: string
 	allowedAaguids?: string | string[] | false

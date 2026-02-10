@@ -139,6 +139,9 @@ const corepass = createCorePassServer({
   // defaultUserName: "My App",
   // defaultUserDisplayName: "My App User",
 
+  // Passkey user id: request body userId, else defaultUserId (if set), else server generates 32 random bytes. Use 32 or 64 bytes, base64/base64url.
+  // defaultUserId: "base64url-or-base64-32-or-64-bytes",
+
   // Pending state: "db" (default) or "cookie"
   // pending: { strategy: "db" },
   // pending: { strategy: "cookie", cookieName: "__corepass_pending", maxAgeSeconds: 120 },
@@ -222,6 +225,7 @@ Each adapter implements `setPending`/`consumePending` so **pending.strategy "db"
 
 ### Start / finish response shape
 
+- **Start** (body): optional **`userId`** — string encoding of a 32- or 64-byte value (base64 or base64url; padding optional). Used as the WebAuthn user handle. Resolution order: request body **userId** → server option **defaultUserId** (set in `createCorePassServer`) → if neither is set, the server falls back to **32 random bytes**. Canonical form is base64url with padding (44 chars for 32 bytes, 88 for 64). Invalid input (wrong length, bad chars, or weak/trivial patterns) causes **400**.
 - **Start** returns `{ options: CreationOptions, pendingKey?, pendingToken? }`. Use `options` for `navigator.credentials.create(options)`. When pending strategy is **db** (and not cookie), send **pendingKey** (and **pendingToken** if present) in the **finish** request body. When pending is **cookie**, the server sets a cookie and you do not need to send pendingKey.
 - **Finish** (body): `{ attestation, pendingKey?, pendingToken?, coreId?, email?, ... }`. For **immediate** finalize, include **coreId** (and optional email/data). For **after** strategy, include **pendingKey** (and **pendingToken** if the backend requires it).
 - **Enrich** (`POST /passkey/data`): when the pending backend requires a token (VerificationToken fallback), include **enrichToken** in the body (returned from finish as `enrichToken`).

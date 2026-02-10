@@ -11,6 +11,7 @@ import { deriveEd448PublicKeyFromCoreId, validateCoreIdMainnet } from "./coreid.
 import { parseEd448Signature, verifyEd448Signature } from "./ed448.js"
 import { extractAaguidFromAttestationObject, validateAaguidAllowlist } from "./aaguid.js"
 
+import { resolvePasskeyUserId } from "../utils/userId.js"
 import type {
 	CorePassFinalizeArgs,
 	CorePassFinalizeResult,
@@ -382,6 +383,16 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			return json(400, { ok: false, error: "Invalid email" })
 		}
 
+		const userIdInput =
+			typeof body?.userId === "string" ? body.userId : options.defaultUserId
+		let userIdResolution: import("../utils/userId.js").UserIdResolution
+		try {
+			userIdResolution = resolvePasskeyUserId(userIdInput)
+		} catch (err) {
+			const message = err instanceof Error ? err.message : "Invalid userId"
+			return json(400, { ok: false, error: message })
+		}
+
 		const challenge = randomChallenge()
 		const payload: CorePassStartPayload = { challenge, email, refId }
 		const expiresAt = new Date(Date.now() + time.flowExpiresInMs)
@@ -424,7 +435,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		const creationOptions = await sw.generateRegistrationOptions({
 			rpID: options.rpID,
 			rpName: options.rpName,
-			userID: randomBytes(32),
+			userID: userIdResolution.userIdBytes,
 			userName: options.defaultUserName ?? email ?? "CorePass",
 			userDisplayName: options.defaultUserDisplayName ?? email ?? "CorePass User",
 			challenge,
