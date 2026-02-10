@@ -191,15 +191,31 @@ export async function HEAD(req: Request) {
 Merge the CorePass store with your Auth.js adapter using the provided adapters (see [Auth.js Database adapters](https://authjs.dev/getting-started/database)):
 
 - **Postgres**: `corepassPostgresAdapter({ pool, schema? })` — use with `@auth/pg-adapter` or any Postgres client that has `.query(text, params)` and optional `.connect()` for transactions.
+- **Neon**: `corepassNeonAdapter({ pool, schema? })` — Postgres-compatible; same as Postgres.
 - **D1 (Cloudflare)**: `corepassD1Adapter(db)` — use with your Auth.js D1 adapter.
 - **Supabase**: `corepassSupabaseAdapter(supabase)` — use with your Auth.js Supabase adapter.
 - **Xata**: `corepassXataAdapter(client)` — implement `XataLike` (getRecord, createOrUpdateRecord, deleteRecord; optional getIdentityByUserId) with your Xata client.
+- **Prisma**: `corepassPrismaAdapter({ client, schema? })` — implement `PrismaLike` (raw SQL via `$executeRawUnsafe` / `$queryRawUnsafe`; optional `$transaction` for tx support).
+- **Drizzle ORM**: `corepassDrizzleAdapter({ client, schema? })` — implement `DrizzleLike` (execute with `{ sql, params }` returning `{ rows? }`).
+- **Kysely**: `corepassKyselyAdapter({ client, schema? })` — implement `KyselyLike` (executeQuery with `?` placeholders).
+- **TypeORM**: `corepassTypeORMAdapter({ client, schema? })` — use with TypeORM DataSource (raw `.query(sql, params)`).
+- **MikroORM**: `corepassMikroORMAdapter({ client, schema? })` — use with EntityManager connection (raw execute).
+- **Sequelize**: `corepassSequelizeAdapter({ client, schema? })` — use with Sequelize instance (raw `.query(sql, { bind })`; Postgres-style `$1`).
 - **DynamoDB**: `corepassDynamoAdapter({ client, pendingTable?, identitiesTable?, profilesTable? })` — implement `DynamoLike` (put, get, delete; optional queryByUserId for getIdentityByUserId) with your DynamoDB document client.
 - **Azure Table Storage**: `corepassAzureTablesAdapter({ client, tableName? })` — implement `AzureTablesLike` (upsertEntity, getEntity, deleteEntity; optional queryEntities) with `@azure/data-tables`.
 - **MongoDB**: `corepassMongoAdapter({ client, pendingCollection?, identitiesCollection?, profilesCollection? })` — use with a `MongoLike` db (collection(name) with findOne, insertOne, updateOne, deleteOne, find).
+- **Firebase Firestore**: `corepassFirebaseAdapter({ client, pendingCollection?, identitiesCollection?, profilesCollection? })` — implement `FirestoreLike` (collection().doc().get/set/delete; where().limit().get() for getIdentityByUserId).
 - **PouchDB**: `corepassPouchAdapter(db)` — implement `PouchDBLike` (get, put, remove; optional find for getIdentityByUserId) with PouchDB.
+- **Upstash Redis**: `corepassUpstashRedisAdapter(redis)` — implement `UpstashRedisLike` (get, set with ex, del, keys).
+- **Unstorage**: `corepassUnstorageAdapter(storage)` — implement `UnstorageLike` (getItem, setItem, removeItem; optional getItems(prefix) for getIdentityByUserId).
+- **Fauna**: `corepassFaunaAdapter(client)` — implement `FaunaCorePassLike` (FQL operations for pending, identities, profiles).
+- **SurrealDB**: `corepassSurrealDBAdapter({ client, namespace?, database? })` — use with SurrealDB client (SQL with params; tables: corepass_pending, corepass_identities, corepass_profiles).
+- **EdgeDB**: `corepassEdgeDBAdapter(client)` — implement `EdgeDBLike` (query, querySingle, execute; EdgeQL schema corepass::Pending, corepass::Identity, corepass::Profile).
+- **Neo4j**: `corepassNeo4jAdapter(session)` — implement `Neo4jLike` (session.run(cypher, params)); nodes: CorePassPending, CorePassIdentity, CorePassProfile.
+- **Dgraph**: `corepassDgraphAdapter(client)` — implement `DgraphCorePassLike` (DQL/GraphQL operations for pending, identities, profiles).
+- **Hasura**: `corepassHasuraAdapter({ client, pendingTable?, identitiesTable?, profilesTable? })` — implement `HasuraLike` (GraphQL request); tables with unique constraints as in Postgres.
 
-Each adapter implements `setPending`/`consumePending` so **pending.strategy "db"** works without the VerificationToken fallback. For SQL adapters (Postgres, D1), apply the `corepass_pending` table from `db/corepass-schema.sql` or `db/corepass-schema.postgres.sql`. For NoSQL adapters, create equivalent collections/tables (see each adapter’s types for the expected schema).
+Each adapter implements `setPending`/`consumePending` so **pending.strategy "db"** works without the VerificationToken fallback. For SQL adapters (Postgres, Neon, D1, Prisma, Drizzle, Kysely, TypeORM, MikroORM, Sequelize), use schema files in **`db/`**: `db/corepass-schema.postgres.sql`, `db/corepass-schema.sql` (D1/SQLite), `db/corepass-schema.surrealdb.surql` (SurrealDB), `db/corepass-schema.edgedb.esdl` (EdgeDB). See `db/README.md` for the full adapter → schema mapping. For NoSQL adapters, create equivalent collections/tables (see each adapter’s types for the expected schema).
 
 ### Start / finish response shape
 
@@ -211,7 +227,7 @@ Each adapter implements `setPending`/`consumePending` so **pending.strategy "db"
 
 The following are **not** part of the new unified API but may still be used internally or for migration:
 
-- **Challenge stores** (e.g. Redis, KV) are no longer used. Pending state is stored via **adapter** (db) or **cookie** (encrypted, short TTL). The package no longer exports `memoryChallengeStore`, `redisChallengeStore`, etc.
+- **Challenge stores** (e.g. Redis, KV) are no longer used. Pending state is stored via **adapter** (db) or **cookie** (encrypted, short TTL).
 - **Store factories** (`d1CorePassStore`, `postgresCorePassStore`, `supabaseCorePassStore`) are deprecated; use **corepassD1Adapter**, **corepassPostgresAdapter**, **corepassSupabaseAdapter** and merge with your Auth.js adapter.
 
 ### Example: Redis (legacy; not used by new API)
