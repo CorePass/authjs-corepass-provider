@@ -1,6 +1,6 @@
 # CorePass schema files
 
-Apply the schema that matches your database **in addition to** your Auth.js adapter’s schema.
+Auth.js does not run migrations; you apply the schema yourself (e.g. Prisma migrate, Drizzle Kit, raw SQL, EdgeDB migrate). Apply the schema that matches your database **in addition to** your Auth.js adapter’s schema.
 
 | Adapter / engine | Schema file |
 | ---------------- | ----------- |
