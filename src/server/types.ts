@@ -93,6 +93,11 @@ export type CreateCorePassServerOptions = {
 	rpName: string
 	expectedOrigin: string
 
+	/** WebAuthn user name fallback order: this value, then email from request, then "CorePass". */
+	defaultUserName?: string
+	/** WebAuthn user display name fallback order: this value, then email from request, then "CorePass User". */
+	defaultUserDisplayName?: string
+
 	signaturePath?: string
 	allowedAaguids?: string | string[] | false
 	pubKeyCredAlgs?: number[]

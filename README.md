@@ -135,6 +135,10 @@ const corepass = createCorePassServer({
   rpName: "Example",
   expectedOrigin: "https://example.com",
 
+  // WebAuthn user name fallbacks: defaultUserName ?? email ?? "CorePass", defaultUserDisplayName ?? email ?? "CorePass User"
+  // defaultUserName: "My App",
+  // defaultUserDisplayName: "My App User",
+
   // Pending state: "db" (default) or "cookie"
   // pending: { strategy: "db" },
   // pending: { strategy: "cookie", cookieName: "__corepass_pending", maxAgeSeconds: 120 },
