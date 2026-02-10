@@ -188,13 +188,18 @@ export async function HEAD(req: Request) {
 
 ### Adapter factories
 
-Merge the CorePass store with your Auth.js adapter using the provided adapters:
+Merge the CorePass store with your Auth.js adapter using the provided adapters (see [Auth.js Database adapters](https://authjs.dev/getting-started/database)):
 
 - **Postgres**: `corepassPostgresAdapter({ pool, schema? })` — use with `@auth/pg-adapter` or any Postgres client that has `.query(text, params)` and optional `.connect()` for transactions.
 - **D1 (Cloudflare)**: `corepassD1Adapter(db)` — use with your Auth.js D1 adapter.
 - **Supabase**: `corepassSupabaseAdapter(supabase)` — use with your Auth.js Supabase adapter.
+- **Xata**: `corepassXataAdapter(client)` — implement `XataLike` (getRecord, createOrUpdateRecord, deleteRecord; optional getIdentityByUserId) with your Xata client.
+- **DynamoDB**: `corepassDynamoAdapter({ client, pendingTable?, identitiesTable?, profilesTable? })` — implement `DynamoLike` (put, get, delete; optional queryByUserId for getIdentityByUserId) with your DynamoDB document client.
+- **Azure Table Storage**: `corepassAzureTablesAdapter({ client, tableName? })` — implement `AzureTablesLike` (upsertEntity, getEntity, deleteEntity; optional queryEntities) with `@azure/data-tables`.
+- **MongoDB**: `corepassMongoAdapter({ client, pendingCollection?, identitiesCollection?, profilesCollection? })` — use with a `MongoLike` db (collection(name) with findOne, insertOne, updateOne, deleteOne, find).
+- **PouchDB**: `corepassPouchAdapter(db)` — implement `PouchDBLike` (get, put, remove; optional find for getIdentityByUserId) with PouchDB.
 
-Each adapter implements `setPending`/`consumePending` (table `corepass_pending`: key, payload_json, expires_at) so **pending.strategy "db"** works without the VerificationToken fallback. Apply the `corepass_pending` table from `db/corepass-schema.sql` or `db/corepass-schema.postgres.sql`.
+Each adapter implements `setPending`/`consumePending` so **pending.strategy "db"** works without the VerificationToken fallback. For SQL adapters (Postgres, D1), apply the `corepass_pending` table from `db/corepass-schema.sql` or `db/corepass-schema.postgres.sql`. For NoSQL adapters, create equivalent collections/tables (see each adapter’s types for the expected schema).
 
 ### Start / finish response shape
 
