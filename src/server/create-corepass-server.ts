@@ -1,9 +1,12 @@
 import WebAuthn from "@auth/core/providers/webauthn"
 import type { AdapterAccount, AdapterAuthenticator, AdapterUser } from "@auth/core/adapters"
 
+import { resolveConfig } from "../config.js"
+import { resolveTimeConfig } from "../time.js"
+import { makePendingBackend, isPendingBackendWithToken } from "../pending/index.js"
+import { getCookie, setCookieHeader, deleteCookieHeader } from "../http/cookies.js"
 import { base64UrlToBytes, bytesToBase64, bytesToBase64Url, normalizeCredentialId } from "./base64.js"
 import { canonicalizeForSignature, canonicalizeJSON } from "./canonical-json.js"
-import { parseCookies, serializeCookie } from "./cookies.js"
 import { deriveEd448PublicKeyFromCoreId, validateCoreIdMainnet } from "./coreid.js"
 import { parseEd448Signature, verifyEd448Signature } from "./ed448.js"
 import { extractAaguidFromAttestationObject, validateAaguidAllowlist } from "./aaguid.js"
@@ -11,7 +14,8 @@ import { extractAaguidFromAttestationObject, validateAaguidAllowlist } from "./a
 import type {
 	CorePassFinalizeArgs,
 	CorePassFinalizeResult,
-	CorePassPendingRegistration,
+	CorePassStartPayload,
+	CorePassPendingRegPayload,
 	CreateCorePassServerOptions,
 } from "./types.js"
 
@@ -86,97 +90,118 @@ function transportsToString(transports: unknown): string | null {
 }
 
 async function finalizeToAuthJs(
+	adapter: CreateCorePassServerOptions["adapter"],
+	runInTx: <T>(fn: (ctx: { tx?: unknown }) => Promise<T>) => Promise<T>,
 	options: CreateCorePassServerOptions,
 	args: CorePassFinalizeArgs
 ): Promise<CorePassFinalizeResult> {
 	const providerId = options.providerId ?? "corepass"
-	const { adapter, store } = options
 	const enableRefId = options.enableRefId ?? false
 
-	// 1) Find or create user by CoreID mapping
-	let identity = await store.getIdentityByCoreId(args.coreId)
-	let user: AdapterUser | null = identity ? await adapter.getUser(identity.userId) : null
+	return runInTx(async (ctx) => {
+		let identity = await adapter.getIdentityByCoreId({ coreId: args.coreId }, ctx)
+		let user: AdapterUser | null = identity ? await adapter.getUser!(identity.userId) : null
 
-	if (!identity || !user) {
-		const emailRequired = options.emailRequired ?? false
-		if (emailRequired && !args.email) throw new Error("Missing email")
+		if (!identity || !user) {
+			const emailRequired = options.emailRequired ?? false
+			if (emailRequired && !args.email) throw new Error("Missing email")
 
-		user = await adapter.createUser({
-			// Most adapters will ignore provided id and generate their own.
-			// CoreID is stored in corepass_identities instead.
-			email: args.email ?? undefined,
-			emailVerified: null,
-			name: args.coreId.toUpperCase(),
-			image: null,
-		} as any)
+			user = await adapter.createUser!({
+				email: args.email ?? undefined,
+				emailVerified: null,
+				name: args.coreId.toUpperCase(),
+				image: null,
+			} as Parameters<NonNullable<typeof adapter.createUser>>[0])
 
-		const refId = enableRefId ? args.refId ?? crypto.randomUUID() : null
-		identity = { coreId: args.coreId, userId: user.id, refId }
-		await store.upsertIdentity(identity)
-	} else {
-		// Keep refId if newly available
-		if (enableRefId && args.refId && !identity.refId) {
-			identity = { ...identity, refId: args.refId }
-			await store.upsertIdentity(identity)
+			const refId = enableRefId ? args.refId ?? crypto.randomUUID() : null
+			identity = { coreId: args.coreId, userId: user.id, refId }
+			await adapter.upsertIdentity({ coreId: args.coreId, userId: user.id, refId }, ctx)
+		} else {
+			if (enableRefId && args.refId && !identity.refId) {
+				await adapter.upsertIdentity({ ...identity, refId: args.refId }, ctx)
+			} else if (enableRefId && !identity.refId) {
+				await adapter.upsertIdentity({ ...identity, refId: crypto.randomUUID() }, ctx)
+			}
 		}
-		if (enableRefId && !identity.refId) {
-			identity = { ...identity, refId: crypto.randomUUID() }
-			await store.upsertIdentity(identity)
+
+		if (args.email && user!.email !== args.email && adapter.updateUser) {
+			user = await adapter.updateUser({ id: user!.id, email: args.email } as Parameters<NonNullable<typeof adapter.updateUser>>[0])
 		}
-	}
 
-	// 2) Update user email if we have it and it differs
-	if (args.email && user.email !== args.email) {
-		user = await adapter.updateUser({ id: user.id, email: args.email } as any)
-	}
+		const providerAccountId = args.credentialId
+		const existingUserByAccount = await adapter.getUserByAccount!({
+			provider: providerId,
+			providerAccountId,
+		})
+		if (existingUserByAccount && existingUserByAccount.id !== user!.id) {
+			throw new Error("Credential already linked to a different user")
+		}
 
-	// 3) Link the WebAuthn account (providerAccountId = credentialId base64)
-	const providerAccountId = args.credentialId
-	const existingUserByAccount = await adapter.getUserByAccount({
-		provider: providerId,
-		providerAccountId,
+		const account: AdapterAccount = {
+			userId: user!.id,
+			provider: providerId,
+			providerAccountId,
+			type: "webauthn",
+		}
+		if (!existingUserByAccount && adapter.linkAccount) {
+			await adapter.linkAccount(account)
+		}
+
+		const existingAuthenticator = await adapter.getAuthenticator?.(providerAccountId)
+		if (!existingAuthenticator && adapter.createAuthenticator) {
+			await adapter.createAuthenticator({
+				...args.authenticator,
+				userId: user!.id,
+			} as AdapterAuthenticator)
+		}
+
+		await adapter.upsertProfile(
+			{
+				userId: user!.id,
+				coreId: args.coreId,
+				o18y: args.o18y,
+				o21y: args.o21y,
+				kyc: args.kyc,
+				kycDoc: args.kycDoc,
+				providedTill: computeProvidedTillFromDataExp(args.dataExpMinutes),
+			},
+			ctx
+		)
+
+		return { userId: user!.id, account }
 	})
-	if (existingUserByAccount && existingUserByAccount.id !== user.id) {
-		throw new Error("Credential already linked to a different user")
-	}
-
-	const account: AdapterAccount = {
-		userId: user.id,
-		provider: providerId,
-		providerAccountId,
-		type: "webauthn",
-	}
-	if (!existingUserByAccount) {
-		await adapter.linkAccount(account)
-	}
-
-	// 4) Create authenticator (idempotent best-effort; adapter may enforce uniqueness)
-	const existingAuthenticator = await adapter.getAuthenticator(providerAccountId)
-	if (!existingAuthenticator) {
-		await adapter.createAuthenticator({
-			...args.authenticator,
-			userId: user.id,
-		} as AdapterAuthenticator)
-	}
-
-	// 5) Store CorePass profile metadata (optional)
-	await store.upsertProfile({
-		userId: user.id,
-		coreId: args.coreId,
-		o18y: args.o18y,
-		o21y: args.o21y,
-		kyc: args.kyc,
-		kycDoc: args.kycDoc,
-		providedTill: computeProvidedTillFromDataExp(args.dataExpMinutes),
-	})
-
-	return { userId: user.id, account }
 }
 
 export function createCorePassServer(options: CreateCorePassServerOptions) {
-	const cookieName = "corepass.sid"
+	const adapter = options.adapter
+	if (!adapter || typeof adapter.upsertIdentity !== "function" || typeof adapter.getIdentityByCoreId !== "function" || typeof adapter.upsertProfile !== "function") {
+		throw new Error("createCorePassServer: adapter must implement upsertIdentity, getIdentityByCoreId, and upsertProfile (CorePassStore)")
+	}
+	if (!options.secret || typeof options.secret !== "string") {
+		throw new Error("createCorePassServer: secret (string) is required")
+	}
 
-	const pendingTtlSeconds = options.pendingTtlSeconds ?? 600
+	const resolved = resolveConfig({
+		...(options.pending !== undefined && { pending: options.pending }),
+		...(options.finalize !== undefined && { finalize: options.finalize }),
+		...(options.cookieName !== undefined && { cookieName: options.cookieName }),
+	})
+	const finalizeImmediate = resolved.finalize.strategy === "immediate"
+	const defaultFlowLifetimeSeconds = finalizeImmediate && options.time?.flowLifetimeSeconds === undefined ? 120 : 600
+	const time = resolveTimeConfig({
+		...options.time,
+		flowLifetimeSeconds: options.time?.flowLifetimeSeconds ?? defaultFlowLifetimeSeconds,
+	})
+	const { backend, requiresToken } = makePendingBackend({
+		adapter,
+		pendingConfig: resolved.pending,
+		secret: options.secret,
+		time,
+	})
+	const runInTx = adapter.withTransaction
+		? (async <T>(fn: (ctx: import("../types.js").CorePassTxContext) => Promise<T>) => adapter.withTransaction!(fn) as Promise<T>)
+		: async <T>(fn: (ctx: { tx?: unknown }) => Promise<T>) => fn({})
+
 	const emailRequired = options.emailRequired ?? false
 	const requireO18y = options.requireO18y ?? false
 	const requireO21y = options.requireO21y ?? false
@@ -197,24 +222,10 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 	const logoutWebhookSecret = options.logoutWebhookSecret
 	const logoutWebhookRetriesRaw = options.logoutWebhookRetries ?? 3
 	const signaturePath = options.signaturePath ?? "/passkey/data"
-	const timestampWindowMs = options.timestampWindowMs ?? 10 * 60 * 1000
 	const timestampFutureSkewMs = options.timestampFutureSkewMs ?? 2 * 60 * 1000
 	const allowedAaguids = options.allowedAaguids ?? COREPASS_DEFAULT_AAGUID
 	const pubKeyCredAlgs = options.pubKeyCredAlgs ?? [-257, -7, -8]
-	const allowImmediateFinalize = options.allowImmediateFinalize ?? false
-	const challengeStore = options.challengeStore ?? null
-	const useChallengeCookie = allowImmediateFinalize && !challengeStore
-	if (!challengeStore && !useChallengeCookie) {
-		throw new Error(
-			"createCorePassServer: challengeStore is required when allowImmediateFinalize is not true"
-		)
-	}
-	if (useChallengeCookie && !options.secret) {
-		throw new Error(
-			"createCorePassServer: secret is required when allowImmediateFinalize is true and challengeStore is not provided (challenge is stored in a signed cookie)"
-		)
-	}
-	const challengeCookieSecret = useChallengeCookie ? options.secret! : ""
+	const pendingCookieName = resolved.pending.strategy === "cookie" ? resolved.pending.cookieName : "__corepass_pending"
 
 	const sw = WebAuthn({}).simpleWebAuthn
 
@@ -226,17 +237,17 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 	if (postLoginWebhooks && !loginWebhookUrl) {
 		throw new Error("createCorePassServer: postLoginWebhooks=true requires loginWebhookUrl")
 	}
-	if (postLoginWebhooks && typeof options.store.getIdentityByUserId !== "function") {
+	if (postLoginWebhooks && typeof adapter.getIdentityByUserId !== "function") {
 		throw new Error(
-			"createCorePassServer: postLoginWebhooks=true requires store.getIdentityByUserId(userId)"
+			"createCorePassServer: postLoginWebhooks=true requires adapter.getIdentityByUserId"
 		)
 	}
 	if (postLogoutWebhooks && !logoutWebhookUrl) {
 		throw new Error("createCorePassServer: postLogoutWebhooks=true requires logoutWebhookUrl")
 	}
-	if (postLogoutWebhooks && typeof options.store.getIdentityByUserId !== "function") {
+	if (postLogoutWebhooks && typeof adapter.getIdentityByUserId !== "function") {
 		throw new Error(
-			"createCorePassServer: postLogoutWebhooks=true requires store.getIdentityByUserId(userId)"
+			"createCorePassServer: postLogoutWebhooks=true requires adapter.getIdentityByUserId"
 		)
 	}
 
@@ -278,38 +289,10 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("")
 	}
 
-	async function signChallengeCookie(payload: { sid: string; challenge: string; email: string | null; refId: string | null }): Promise<string> {
-		const b64 = bytesToBase64Url(new TextEncoder().encode(JSON.stringify(payload)))
-		const sig = await hmacSha256Hex(challengeCookieSecret, b64)
-		return `${b64}.${sig}`
-	}
-
-	async function verifyChallengeCookie(value: string): Promise<{ challenge: string; email: string | null; refId: string | null } | null> {
-		const dot = value.indexOf(".")
-		if (dot <= 0) return null
-		const b64 = value.slice(0, dot)
-		const sig = value.slice(dot + 1)
-		const expectedSig = await hmacSha256Hex(challengeCookieSecret, b64)
-		if (sig !== expectedSig) return null
-		try {
-			const json = new TextDecoder().decode(base64UrlToBytes(b64))
-			const payload = JSON.parse(json) as { sid?: string; challenge?: string; email?: string | null; refId?: string | null }
-			if (typeof payload.challenge !== "string") return null
-			return {
-				challenge: payload.challenge,
-				email: payload.email ?? null,
-				refId: payload.refId ?? null,
-			}
-		} catch {
-			return null
-		}
-	}
-
-	function withClearChallengeCookieIfUsed(res: Response): Response {
-		if (!useChallengeCookie) return res
-		const clearCookie = serializeCookie(cookieName, "", { path: "/", maxAge: 0 })
+	function withPendingCookieHeaders(res: Response, cookieHeaders: string[]): Response {
+		if (cookieHeaders.length === 0) return res
 		const headers = new Headers(res.headers)
-		headers.append("set-cookie", clearCookie)
+		for (const h of cookieHeaders) headers.append("set-cookie", h)
 		return new Response(res.body, { status: res.status, headers })
 	}
 
@@ -363,7 +346,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 
 	async function postLoginWebhook(args: { userId: string }): Promise<void> {
 		if (!postLoginWebhooks || !loginWebhookUrl) return
-		const identity = await options.store.getIdentityByUserId?.(args.userId)
+		const identity = await adapter.getIdentityByUserId?.({ userId: args.userId })
 		if (!identity) return
 		const payload: Record<string, unknown> = { coreId: identity.coreId }
 		if (identity.refId) payload.refId = identity.refId
@@ -377,7 +360,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 
 	async function postLogoutWebhook(args: { userId: string }): Promise<void> {
 		if (!postLogoutWebhooks || !logoutWebhookUrl) return
-		const identity = await options.store.getIdentityByUserId?.(args.userId)
+		const identity = await adapter.getIdentityByUserId?.({ userId: args.userId })
 		if (!identity) return
 		const payload: Record<string, unknown> = { coreId: identity.coreId }
 		if (identity.refId) payload.refId = identity.refId
@@ -390,7 +373,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 	}
 
 	async function startRegistration(req: Request): Promise<Response> {
-		const body = (await req.json().catch(() => null)) as any
+		const body = (await req.json().catch(() => null)) as Record<string, unknown>
 		const email = parseEmail(body?.email)
 		const refId =
 			enableRefId && typeof body?.refId === "string" ? body.refId.trim() || null : null
@@ -400,21 +383,30 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		}
 
 		const challenge = randomChallenge()
-		const sid = crypto.randomUUID()
+		const payload: CorePassStartPayload = { challenge, email, refId }
+		const expiresAt = new Date(Date.now() + time.flowExpiresInMs)
+		const useCookie = resolved.pending.strategy === "cookie"
+		const pendingKey = useCookie ? "reg" : bytesToBase64Url(randomBytes(16))
 
-		if (challengeStore) {
-			await challengeStore.put(
-				`reg:${sid}`,
-				JSON.stringify({ challenge, email, refId }),
-				pendingTtlSeconds
-			)
+		const cookieHeaders: string[] = []
+		const headerRecord = Object.fromEntries(req.headers.entries()) as Record<string, string | string[] | undefined>
+		const cookieAccess = {
+			getCookie: (name: string) => getCookie(headerRecord, name),
+			setCookieHeader: (name: string, value: string, opts?: { maxAge: number; path?: string }) => {
+				cookieHeaders.push(setCookieHeader(name, value, { ...opts, path: opts?.path ?? "/" }))
+			},
+			deleteCookieHeader: (name: string) => {
+				cookieHeaders.push(deleteCookieHeader(name, "/"))
+			},
 		}
+		const ctx = useCookie ? ({ cookieAccess } as import("../types.js").CorePassTxContext) : undefined
+		const setResult = await backend.set(pendingKey, payload, expiresAt, ctx)
+		const pendingToken = setResult && typeof setResult === "object" && "pendingToken" in setResult ? (setResult as { pendingToken: string }).pendingToken : undefined
 
 		const attestationType = options.attestationType ?? "none"
 		const authenticatorAttachment = options.authenticatorAttachment ?? "cross-platform"
 		const residentKey = options.residentKey ?? "preferred"
 		const userVerification = options.userVerification ?? "required"
-		const registrationTimeout = options.registrationTimeout ?? 60_000
 		const transports = options.transports && options.transports.length > 0 ? options.transports : undefined
 
 		const authenticatorSelection: {
@@ -439,56 +431,66 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			pubKeyCredParams: pubKeyCredAlgs.map((alg) => ({ alg, type: "public-key" })),
 			authenticatorSelection,
 			attestationType,
-			timeout: registrationTimeout,
+			timeout: time.registrationTimeoutMs,
 			excludeCredentials: [],
 		})
 
-		const cookieValue = challengeStore
-			? sid
-			: await signChallengeCookie({ sid, challenge, email, refId })
-		return json(200, creationOptions, {
-			"set-cookie": serializeCookie(cookieName, cookieValue, {
-				httpOnly: true,
-				secure: true,
-				sameSite: "Lax",
-				path: "/",
-				maxAge: pendingTtlSeconds,
-			}),
-		})
+		const responseBody: Record<string, unknown> = { options: creationOptions }
+		if (!useCookie) {
+			responseBody.pendingKey = pendingKey
+			if (requiresToken && pendingToken) responseBody.pendingToken = pendingToken
+		}
+		const res = json(200, responseBody)
+		return withPendingCookieHeaders(res, cookieHeaders)
 	}
 
 	async function finishRegistration(req: Request): Promise<Response> {
-		const body = (await req.json().catch(() => null)) as any
-		const attestation = body?.attestation as any
-		if (!attestation) return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "Bad request" }))
+		const body = (await req.json().catch(() => null)) as Record<string, unknown>
+		const attestation = body?.attestation
+		if (!attestation) return json(400, { ok: false, error: "Bad request" })
 
-		const cookies = parseCookies(req.headers.get("cookie"))
-		const cookieVal = cookies[cookieName]
-		if (!cookieVal) return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "No session" }))
+		const useCookie = resolved.pending.strategy === "cookie"
+		const pendingKey = useCookie ? "reg" : (typeof body?.pendingKey === "string" ? body.pendingKey.trim() : null)
+		const pendingToken = typeof body?.pendingToken === "string" ? body.pendingToken : undefined
 
-		let saved: { challenge: string; email: string | null; refId: string | null }
-		if (challengeStore) {
-			const sid = cookieVal
-			const raw = await challengeStore.get(`reg:${sid}`)
-			if (!raw) return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "Challenge expired" }))
-			await challengeStore.delete(`reg:${sid}`)
-			saved = JSON.parse(raw) as { challenge: string; email: string | null; refId: string | null }
+		if (!pendingKey) {
+			return json(400, { ok: false, error: useCookie ? "No pending cookie" : "Missing pendingKey" })
+		}
+		if (requiresToken && !pendingToken) {
+			return json(400, { ok: false, error: "Missing pendingToken (required for this pending backend)" })
+		}
+
+		const cookieHeaders: string[] = []
+		const headerRecordFinish = Object.fromEntries(req.headers.entries()) as Record<string, string | string[] | undefined>
+		const cookieAccess = {
+			getCookie: (name: string) => getCookie(headerRecordFinish, name),
+			setCookieHeader: () => {},
+			deleteCookieHeader: (name: string) => {
+				cookieHeaders.push(deleteCookieHeader(name, "/"))
+			},
+		}
+		const ctx = useCookie ? ({ cookieAccess } as import("../types.js").CorePassTxContext) : undefined
+		let saved: CorePassStartPayload | null
+		if (isPendingBackendWithToken(backend)) {
+			const token = typeof pendingToken === "string" ? pendingToken : ""
+			saved = (await backend.consumeWithToken(pendingKey, token, ctx)) as CorePassStartPayload | null
 		} else {
-			const payload = await verifyChallengeCookie(cookieVal)
-			if (!payload) return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "Challenge expired or invalid" }))
-			saved = payload
+			saved = (await backend.consume(pendingKey, ctx)) as CorePassStartPayload | null
+		}
+		if (!saved || typeof saved.challenge !== "string") {
+			return withPendingCookieHeaders(json(400, { ok: false, error: "Challenge expired or invalid" }), cookieHeaders)
 		}
 		const expectedChallenge = saved.challenge
 
 		// Validate AAGUID allowlist (CorePass app gate)
-		const aaguid = extractAaguidFromAttestationObject((attestation as any)?.response?.attestationObject)
+		const aaguid = extractAaguidFromAttestationObject((attestation as { response?: { attestationObject?: string } })?.response?.attestationObject)
 		if (!validateAaguidAllowlist(aaguid, allowedAaguids)) {
-			return withClearChallengeCookieIfUsed(json(400, {
+			return withPendingCookieHeaders(json(400, {
 				ok: false,
 				error: "AAGUID not allowed",
 				aaguid,
 				allowedAaguids: allowedAaguids ?? null,
-			}))
+			}), cookieHeaders)
 		}
 
 		const requireUserVerification = options.userVerification !== "discouraged"
@@ -502,11 +504,11 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 				requireUserVerification,
 			})
 		} catch {
-			return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "Invalid registration response" }))
+			return withPendingCookieHeaders(json(400, { ok: false, error: "Invalid registration response" }), cookieHeaders)
 		}
 
 		if (!verification.verified || !verification.registrationInfo) {
-			return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "Registration not verified" }))
+			return withPendingCookieHeaders(json(400, { ok: false, error: "Registration not verified" }), cookieHeaders)
 		}
 
 		const credentialIdBase64 = bytesToBase64(verification.registrationInfo.credentialID)
@@ -524,26 +526,27 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		}
 
 		const coreIdFromBody = typeof body?.coreId === "string" ? body.coreId.trim() : null
-		const allowImmediateFinalize = options.allowImmediateFinalize ?? false
 
-		if (allowImmediateFinalize && coreIdFromBody) {
+		if (finalizeImmediate && coreIdFromBody) {
 			if (!validateCoreIdMainnet(coreIdFromBody)) {
-				return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "Invalid Core ID (mainnet)" }))
+				return withPendingCookieHeaders(json(400, { ok: false, error: "Invalid Core ID (mainnet)" }), cookieHeaders)
 			}
 
 			const emailFromBody = parseEmail(body?.email)
 			if (body?.email !== undefined && body?.email !== null && !emailFromBody) {
-				return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "Invalid email" }))
+				return withPendingCookieHeaders(json(400, { ok: false, error: "Invalid email" }), cookieHeaders)
 			}
 			const finalEmail = emailFromBody || saved.email || null
-			if (emailRequired && !finalEmail) return withClearChallengeCookieIfUsed(json(400, { ok: false, error: "Missing email" }))
+			if (emailRequired && !finalEmail) {
+				return withPendingCookieHeaders(json(400, { ok: false, error: "Missing email" }), cookieHeaders)
+			}
 
-			const result = await finalizeToAuthJs(options, {
+			const result = await finalizeToAuthJs(adapter, runInTx, options, {
 				coreId: coreIdFromBody,
 				credentialId: credentialIdBase64,
 				authenticator,
 				email: finalEmail,
-				refId: enableRefId ? saved.refId : null,
+				refId: enableRefId ? saved.refId ?? null : null,
 				o18y: parseBool(body?.o18y),
 				o21y: parseBool(body?.o21y),
 				kyc: parseBool(body?.kyc),
@@ -551,20 +554,19 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 				dataExpMinutes: parseDataExpMinutes(body?.dataExp),
 			})
 
-			const storedIdentity = await options.store.getIdentityByCoreId(coreIdFromBody)
+			const storedIdentity = await adapter.getIdentityByCoreId({ coreId: coreIdFromBody })
 			await maybePostRegistrationWebhook({
 				coreId: coreIdFromBody,
 				refId: enableRefId ? storedIdentity?.refId ?? null : null,
 			})
 
-			return withClearChallengeCookieIfUsed(json(200, { ok: true, finalized: true, userId: result.userId, coreId: coreIdFromBody }))
+			return withPendingCookieHeaders(json(200, { ok: true, finalized: true, userId: result.userId, coreId: coreIdFromBody }), cookieHeaders)
 		}
 
-		const token = crypto.randomUUID()
+		// After strategy: store pending for enrich
 		const createdAt = nowSec()
-		const expiresAt = createdAt + pendingTtlSeconds
-		const pending: CorePassPendingRegistration = {
-			token,
+		const expiresAtSec = createdAt + time.flowLifetimeSeconds
+		const pendingPayload: CorePassPendingRegPayload = {
 			credentialId: credentialIdBase64,
 			credentialPublicKey: credentialPublicKeyBase64,
 			counter: authenticator.counter,
@@ -572,37 +574,42 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			credentialBackedUp: authenticator.credentialBackedUp,
 			transports: authenticator.transports ?? null,
 			email: saved.email,
-			refId: enableRefId ? saved.refId : null,
+			refId: enableRefId ? saved.refId ?? null : null,
 			aaguid,
 			createdAt,
-			expiresAt,
+			expiresAt: expiresAtSec,
 		}
-		await options.store.createPendingRegistration(pending)
+		const enrichExpiresAt = new Date(Date.now() + time.flowExpiresInMs)
+		const setEnrichResult = await backend.set(credentialIdBase64, pendingPayload, enrichExpiresAt)
+		const enrichToken = setEnrichResult && typeof setEnrichResult === "object" && "pendingToken" in setEnrichResult
+			? (setEnrichResult as { pendingToken: string }).pendingToken
+			: undefined
 
-		return withClearChallengeCookieIfUsed(json(200, {
-			ok: true,
-			pending: true,
-			enrichToken: token,
-			credentialId: credentialIdBase64,
-		}))
+		const out: Record<string, unknown> = { ok: true, pending: true, credentialId: credentialIdBase64 }
+		if (enrichToken) out.enrichToken = enrichToken
+		return withPendingCookieHeaders(json(200, out), cookieHeaders)
 	}
 
 	async function enrichRegistration(req: Request): Promise<Response> {
 		const rawBody = await req.text()
-		let body: any
+		let body: Record<string, unknown>
 		try {
-			body = JSON.parse(rawBody)
+			body = JSON.parse(rawBody) as Record<string, unknown>
 		} catch {
 			return json(400, { ok: false, error: "Invalid JSON" })
 		}
 
 		const coreId = typeof body?.coreId === "string" ? body.coreId.trim() : null
 		const credentialIdRaw = typeof body?.credentialId === "string" ? body.credentialId.trim() : null
+		const enrichTokenRaw: string | undefined = typeof body?.enrichToken === "string" ? (body.enrichToken as string) : undefined
 		const timestamp = body?.timestamp as unknown
-		const userData = body?.userData ?? {}
+		const userData = (body?.userData ?? {}) as Record<string, unknown>
 
 		if (!coreId || !credentialIdRaw || typeof timestamp !== "number") {
 			return json(400, { ok: false, error: "Missing required fields: coreId, credentialId, timestamp" })
+		}
+		if (requiresToken && !enrichTokenRaw) {
+			return json(400, { ok: false, error: "Missing enrichToken (required for this pending backend)" })
 		}
 
 		if (!validateCoreIdMainnet(coreId)) {
@@ -613,13 +620,12 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		if (!credentialIdNormalized) return json(400, { ok: false, error: "Invalid credentialId encoding" })
 		const credentialIdBase64 = credentialIdNormalized.base64
 
-		// Timestamp must be integer microseconds since Unix epoch
 		if (!Number.isSafeInteger(timestamp) || timestamp <= 0) {
 			return json(400, { ok: false, error: "Invalid timestamp (microseconds)" })
 		}
 
 		const tNowUs = nowUs()
-		const windowUs = timestampWindowMs * 1000
+		const windowUs = time.timestampWindowMs * 1000
 		const futureSkewUs = timestampFutureSkewMs * 1000
 		if (tNowUs - timestamp > windowUs) return json(400, { ok: false, error: "Timestamp too old" })
 		if (timestamp - tNowUs > futureSkewUs) return json(400, { ok: false, error: "Timestamp too far in future" })
@@ -640,11 +646,16 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		const valid = await verifyEd448Signature({ publicKeyBytes, messageBytes, signatureBytes })
 		if (!valid) return json(400, { ok: false, error: "Invalid signature" })
 
-		const pending = await options.store.getPendingRegistrationByCredentialId(credentialIdBase64)
-		if (!pending) return json(400, { ok: false, error: "Pending registration not found" })
+		let pending: CorePassPendingRegPayload | null
+		if (isPendingBackendWithToken(backend)) {
+			const token = requiresToken ? (enrichTokenRaw ?? "") : ""
+			pending = (await backend.consumeWithToken(credentialIdBase64, token, undefined)) as CorePassPendingRegPayload | null
+		} else {
+			pending = (await backend.consume(credentialIdBase64, undefined)) as CorePassPendingRegPayload | null
+		}
+		if (!pending) return json(400, { ok: false, error: "Pending registration not found or already consumed" })
 
 		if (pending.expiresAt < nowSec()) {
-			await options.store.deletePendingRegistrationByToken(pending.token)
 			return json(400, { ok: false, error: "Pending registration expired" })
 		}
 
@@ -657,48 +668,32 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		const refIdFromBody =
 			enableRefId && typeof userData?.refId === "string" ? userData.refId.trim() || null : null
 
-		const failAndCleanup = async (status: number, error: string): Promise<Response> => {
-			await options.store.deletePendingRegistrationByToken(pending.token)
-			return json(status, { ok: false, error })
-		}
-
-		// Validate parsed fields (and cleanup pending on failure)
 		if (userData?.email !== undefined && userData?.email !== null && !emailFromBody) {
-			return await failAndCleanup(400, "Invalid email format")
+			return json(400, { ok: false, error: "Invalid email format" })
 		}
 		if (userData?.o18y !== undefined && userData?.o18y !== null && o18yFromBody === null) {
-			return await failAndCleanup(400, "Invalid o18y")
+			return json(400, { ok: false, error: "Invalid o18y" })
 		}
 		if (userData?.o21y !== undefined && userData?.o21y !== null && o21yFromBody === null) {
-			return await failAndCleanup(400, "Invalid o21y")
+			return json(400, { ok: false, error: "Invalid o21y" })
 		}
 		if (userData?.kyc !== undefined && userData?.kyc !== null && kycFromBody === null) {
-			return await failAndCleanup(400, "Invalid kyc")
+			return json(400, { ok: false, error: "Invalid kyc" })
 		}
 		if (userData?.dataExp !== undefined && userData?.dataExp !== null && dataExpMinutes === null) {
-			return await failAndCleanup(400, "Invalid dataExp")
+			return json(400, { ok: false, error: "Invalid dataExp" })
 		}
 
-		// Policy gates (enrich/pending path only; not enforced for immediate-finalize)
-		if (requireO18y && o18yFromBody !== true) {
-			return await failAndCleanup(403, "o18y required")
-		}
-		if (requireO21y && o21yFromBody !== true) {
-			return await failAndCleanup(403, "o21y required")
-		}
-		if (requireKyc && kycFromBody !== true) {
-			return await failAndCleanup(403, "kyc required")
-		}
+		if (requireO18y && o18yFromBody !== true) return json(403, { ok: false, error: "o18y required" })
+		if (requireO21y && o21yFromBody !== true) return json(403, { ok: false, error: "o21y required" })
+		if (requireKyc && kycFromBody !== true) return json(403, { ok: false, error: "kyc required" })
 
 		const finalEmail = emailFromBody || pending.email || null
 		if (emailRequired && !finalEmail) {
-			await options.store.deletePendingRegistrationByToken(pending.token)
 			return json(400, { ok: false, error: "Missing email" })
 		}
 
 		const refId = enableRefId ? refIdFromBody || pending.refId || null : null
-
-		await options.store.deletePendingRegistrationByToken(pending.token)
 
 		const authenticator: Omit<AdapterAuthenticator, "userId"> = {
 			providerAccountId: pending.credentialId,
@@ -710,7 +705,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			transports: pending.transports,
 		}
 
-		const result = await finalizeToAuthJs(options, {
+		const result = await finalizeToAuthJs(adapter, runInTx, options, {
 			coreId,
 			credentialId: pending.credentialId,
 			authenticator,
@@ -723,7 +718,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			dataExpMinutes,
 		})
 
-		const storedIdentity = await options.store.getIdentityByCoreId(coreId)
+		const storedIdentity = await adapter.getIdentityByCoreId({ coreId })
 		await maybePostRegistrationWebhook({ coreId, refId: storedIdentity?.refId ?? null })
 
 		return json(200, {
@@ -735,7 +730,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 	}
 
 	function checkEnrichment(): Response {
-		const available = !(options.allowImmediateFinalize ?? false)
+		const available = resolved.finalize.strategy === "after"
 		return new Response(null, { status: available ? 200 : 404 })
 	}
 

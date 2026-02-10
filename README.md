@@ -4,9 +4,9 @@ CorePass provider and server helpers for [Auth.js](https://authjs.dev/) (`@auth/
 
 **Flow in short:**
 
-- CorePass first checks **`HEAD /passkey/data`**: **200** = enrichment available (pending mode), **404** = enrichment not available (e.g. `allowImmediateFinalize` enabled).
-- **If enrichment available (200):** browser does WebAuthn attestation via `POST /webauthn/start` and `POST /webauthn/finish` → server stores a **pending registration** → CorePass app finalizes by calling **`POST /passkey/data`** with an **Ed448-signed** payload.
-- **If enrichment not available (404):** browser completes attestation and finalizes in one go via `POST /webauthn/finish` with `coreId` (and optional data); no enrich step.
+- CorePass first checks **`HEAD /passkey/data`**: **200** = enrichment available (finalize strategy **after**), **404** = enrichment not available (finalize strategy **immediate**).
+- **If enrichment available (200):** browser does WebAuthn via `POST /webauthn/start` and `POST /webauthn/finish` → server stores pending state (db or cookie) → CorePass app finalizes by calling **`POST /passkey/data`** with an **Ed448-signed** payload.
+- **If enrichment not available (404):** browser completes attestation and finalizes in one go via `POST /webauthn/finish` with `coreId` (and optional data); no enrich step (finalize strategy **immediate**).
 
 ## What you get
 
@@ -15,7 +15,7 @@ CorePass provider and server helpers for [Auth.js](https://authjs.dev/) (`@auth/
   - `startRegistration(req)`
   - `finishRegistration(req)`
   - `enrichRegistration(req)` (your `/passkey/data`)
-  - `checkEnrichment()` (`HEAD /passkey/data`: 200 when enrichment available, 404 when `allowImmediateFinalize` is enabled)
+  - `checkEnrichment()` (`HEAD /passkey/data`: 200 when finalize strategy is **after**, 404 when **immediate**)
 - **DB extension schema**: `db/corepass-schema.sql`
 
 ## Flows
@@ -27,8 +27,7 @@ sequenceDiagram
   autonumber
   actor B as Browser
   participant S as Your backend
-  participant KV as Challenge store
-  participant DB as CorePass store
+  participant Adapter as Adapter (CorePass store + pending)
   actor A as CorePass app
 
   A->>S: HEAD /passkey/data
@@ -36,23 +35,23 @@ sequenceDiagram
   Note over A: If 200, use enrich flow below
 
   B->>S: POST /webauthn/start { email? }
-  Note over B,S: Pending TTL default is 10 minutes (pendingTtlSeconds=600)
-  S->>KV: put reg:sid {challenge,email} ttl
-  S-->>B: 200 CreationOptions + Set-Cookie corepass.sid
-  B->>B: navigator.credentials.create()
-  B->>S: POST /webauthn/finish { attestation, email? }
-  S->>KV: get+delete reg:sid
+  Note over B,S: Pending: adapter setPending/consumePending or cookie (no separate challenge store)
+  S->>Adapter: setPending(pendingKey, …)
+  S-->>B: 200 { options: CreationOptions, pendingKey?, pendingToken? } + Set-Cookie (if cookie strategy)
+  B->>B: navigator.credentials.create(options)
+  B->>S: POST /webauthn/finish { attestation, pendingKey, pendingToken?, email? }
+  S->>Adapter: consumePending(pendingKey) / consumeWithToken(…)
   S->>S: verifyRegistrationResponse()
-  S->>DB: createPendingRegistration(credentialId, publicKey, counter, aaguid, email?)
-  S-->>B: 200 { pending:true, enrichToken, credentialId }
+  S->>Adapter: setPending(credentialId, pendingRegPayload)
+  S-->>B: 200 { pending:true, credentialId, enrichToken? }
 
   A->>S: POST /passkey/data {coreId, credentialId, timestamp, userData} + X-Signature (Ed448)
   Note over A,S: Only when enrichment available (HEAD returned 200)
   S->>S: validateCoreIdMainnet + timestamp window
   S->>S: verify Ed448 signature over canonical JSON
-  S->>DB: load+delete pending by credentialId
-  S->>S: create/link Auth.js user+account+authenticator
-  S->>DB: upsert CorePass identity/profile (provided_till, flags)
+  S->>Adapter: consumePending(credentialId) / consumeWithToken(…)
+  S->>Adapter: create/link Auth.js user+account+authenticator
+  S->>Adapter: upsertIdentity / upsertProfile (provided_till, flags)
   S->>S: (optional) POST registration webhook { coreId, refId? } (registrationWebhookRetries, default 3)
   Note over S: If registrationWebhookSecret is set, include HMAC headers:\nX-Webhook-Timestamp + X-Webhook-Signature
   S-->>A: 200 ok
@@ -67,15 +66,15 @@ sequenceDiagram
   autonumber
   actor B as Browser
   participant Auth as Auth.js (@auth/core)
-  participant DB as Adapter DB
+  participant Adapter as Adapter (any supported DB)
 
   B->>Auth: GET /auth/webauthn-options?action=authenticate (provider=corepass)
-  Auth->>DB: listAuthenticatorsByUserId (optional) / challenge cookie
+  Auth->>Adapter: listAuthenticatorsByUserId (optional) / challenge cookie
   Auth-->>B: 200 RequestOptions + challenge cookie
   B->>B: navigator.credentials.get()
   B->>Auth: POST /auth/callback/corepass { action:"authenticate", data }
-  Auth->>DB: getAuthenticator(credentialId) + verifyAuthenticationResponse()
-  Auth->>DB: updateAuthenticatorCounter()
+  Auth->>Adapter: getAuthenticator(credentialId) + verifyAuthenticationResponse()
+  Auth->>Adapter: updateAuthenticatorCounter()
   Auth-->>B: session established
   Note over Auth: (optional) POST login webhook { coreId, refId? } (loginWebhookRetries, default 3)
 ```
@@ -119,28 +118,37 @@ export const auth = (req: Request) =>
 You mount these where you want in your app (framework-specific). The handlers are plain Web API `Request -> Response`.
 
 ```ts
-import { createCorePassServer } from "authjs-corepass-provider"
+import { createCorePassServer, corepassPostgresAdapter } from "authjs-corepass-provider"
+// Your Auth.js adapter (e.g. from @auth/pg-adapter or custom)
+import { yourAuthJsAdapter } from "..."
+
+// Single unified adapter: merge Auth.js adapter with CorePass store
+const adapter = {
+  ...yourAuthJsAdapter,
+  ...corepassPostgresAdapter({ pool, schema: "public" }),
+}
 
 const corepass = createCorePassServer({
-  adapter: /* Auth.js adapter (must implement WebAuthn + user methods) */,
-  // store must implement CorePassStore:
-  // - pending registrations (default flow)
-  // - coreId <-> userId identity mapping
-  // - profile metadata (o18y/o21y/kyc/provided_till)
-  //
-  // Built-ins:
-  // - d1CorePassStore(db) for Cloudflare D1
-  // - postgresCorePassStore(pg) for Postgres (node-postgres, etc)
-  // - supabaseCorePassStore(supabase) for Supabase client
-  store: /* CorePassStore implementation */,
-  challengeStore: /* CorePassChallengeStore (optional if allowImmediateFinalize: true; then set secret) */,
+  adapter,
+  secret: process.env.COREPASS_SECRET!, // required (cookie + VT encryption)
   rpID: "example.com",
   rpName: "Example",
   expectedOrigin: "https://example.com",
 
-  // default: pending registrations are required
-  allowImmediateFinalize: false,
-  // secret: required when allowImmediateFinalize is true and challengeStore is omitted (challenge in signed cookie)
+  // Pending state: "db" (default) or "cookie"
+  // pending: { strategy: "db" },
+  // pending: { strategy: "cookie", cookieName: "__corepass_pending", maxAgeSeconds: 120 },
+
+  // Finalize: "after" (default, requires enrich) or "immediate" (single roundtrip; forces cookie pending)
+  // finalize: { strategy: "after" },
+  // finalize: { strategy: "immediate", maxAgeSeconds: 120 },
+
+  // Optional: unified time config (flow lifetime, registration timeout, timestamp window)
+  // time: {
+  //   flowLifetimeSeconds: 600,
+  //   registrationTimeoutMs: 60000,
+  //   timestampWindowMs: 600000, // optional; default equals flow lifetime
+  // },
 })
 
 // Optional: login webhook (call from Auth.js events.signIn)
@@ -177,61 +185,53 @@ export async function HEAD(req: Request) {
 }
 ```
 
-### “Unified” server factory helpers (same DB client)
+### Adapter factories
 
-If you want to avoid manually wiring `store: d1CorePassStore(...)` etc, you can use the factories:
+Merge the CorePass store with your Auth.js adapter using the provided adapters (see [Auth.js Database adapters](https://authjs.dev/getting-started/database)):
 
-- `createCorePassServerD1({ db, ... })`
-- `createCorePassServerPostgres({ pg, ... })`
-- `createCorePassServerSupabase({ supabase, ... })`
-- `createCorePassServerCloudflareD1Kv({ db, kv, ... })`
-- `createCorePassServerPostgresRedis({ pg, redis, ... })`
-- `createCorePassServerSupabaseUpstash({ supabase, redis, ... })`
-- `createCorePassServerSupabaseVercelKv({ supabase, kv, ... })`
+- **Postgres**: `corepassPostgresAdapter({ pool, schema? })` — use with `@auth/pg-adapter` or any Postgres client that has `.query(text, params)` and optional `.connect()` for transactions.
+- **Neon**: `corepassNeonAdapter({ pool, schema? })` — Postgres-compatible; same as Postgres.
+- **D1 (Cloudflare)**: `corepassD1Adapter(db)` — use with your Auth.js D1 adapter.
+- **Supabase**: `corepassSupabaseAdapter(supabase)` — use with your Auth.js Supabase adapter.
+- **Xata**: `corepassXataAdapter(client)` — implement `XataLike` (getRecord, createOrUpdateRecord, deleteRecord; optional getIdentityByUserId) with your Xata client.
+- **Prisma**: `corepassPrismaAdapter({ client, schema? })` — implement `PrismaLike` (raw SQL via `$executeRawUnsafe` / `$queryRawUnsafe`; optional `$transaction` for tx support).
+- **Drizzle ORM**: `corepassDrizzleAdapter({ client, schema? })` — implement `DrizzleLike` (execute with `{ sql, params }` returning `{ rows? }`).
+- **Kysely**: `corepassKyselyAdapter({ client, schema? })` — implement `KyselyLike` (executeQuery with `?` placeholders).
+- **TypeORM**: `corepassTypeORMAdapter({ client, schema? })` — use with TypeORM DataSource (raw `.query(sql, params)`).
+- **MikroORM**: `corepassMikroORMAdapter({ client, schema? })` — use with EntityManager connection (raw execute).
+- **Sequelize**: `corepassSequelizeAdapter({ client, schema? })` — use with Sequelize instance (raw `.query(sql, { bind })`; Postgres-style `$1`).
+- **DynamoDB**: `corepassDynamoAdapter({ client, pendingTable?, identitiesTable?, profilesTable? })` — implement `DynamoLike` (put, get, delete; optional queryByUserId for getIdentityByUserId) with your DynamoDB document client.
+- **Azure Table Storage**: `corepassAzureTablesAdapter({ client, tableName? })` — implement `AzureTablesLike` (upsertEntity, getEntity, deleteEntity; optional queryEntities) with `@azure/data-tables`.
+- **MongoDB**: `corepassMongoAdapter({ client, pendingCollection?, identitiesCollection?, profilesCollection? })` — use with a `MongoLike` db (collection(name) with findOne, insertOne, updateOne, deleteOne, find).
+- **Firebase Firestore**: `corepassFirebaseAdapter({ client, pendingCollection?, identitiesCollection?, profilesCollection? })` — implement `FirestoreLike` (collection().doc().get/set/delete; where().limit().get() for getIdentityByUserId).
+- **PouchDB**: `corepassPouchAdapter(db)` — implement `PouchDBLike` (get, put, remove; optional find for getIdentityByUserId) with PouchDB.
+- **Upstash Redis**: `corepassUpstashRedisAdapter(redis)` — implement `UpstashRedisLike` (get, set with ex, del, keys).
+- **Unstorage**: `corepassUnstorageAdapter(storage)` — implement `UnstorageLike` (getItem, setItem, removeItem; optional getItems(prefix) for getIdentityByUserId).
+- **Fauna**: `corepassFaunaAdapter(client)` — implement `FaunaCorePassLike` (FQL operations for pending, identities, profiles).
+- **SurrealDB**: `corepassSurrealDBAdapter({ client, namespace?, database? })` — use with SurrealDB client (SQL with params; tables: corepass_pending, corepass_identities, corepass_profiles).
+- **EdgeDB**: `corepassEdgeDBAdapter(client)` — implement `EdgeDBLike` (query, querySingle, execute; EdgeQL schema corepass::Pending, corepass::Identity, corepass::Profile).
+- **Neo4j**: `corepassNeo4jAdapter(session)` — implement `Neo4jLike` (session.run(cypher, params)); nodes: CorePassPending, CorePassIdentity, CorePassProfile.
+- **Dgraph**: `corepassDgraphAdapter(client)` — implement `DgraphCorePassLike` (DQL/GraphQL operations for pending, identities, profiles).
+- **Hasura**: `corepassHasuraAdapter({ client, pendingTable?, identitiesTable?, profilesTable? })` — implement `HasuraLike` (GraphQL request); tables with unique constraints as in Postgres.
 
-This does **not** create an Auth.js adapter for you (adapters are separate packages), but it ensures the CorePass
-store uses the same DB client you pass in.
+Each adapter implements `setPending`/`consumePending` so **pending.strategy "db"** works without the VerificationToken fallback. For SQL adapters (Postgres, Neon, D1, Prisma, Drizzle, Kysely, TypeORM, MikroORM, Sequelize), use schema files in **`db/`**: `db/corepass-schema.postgres.sql`, `db/corepass-schema.sql` (D1/SQLite), `db/corepass-schema.surrealdb.surql` (SurrealDB), `db/corepass-schema.edgedb.esdl` (EdgeDB). See `db/README.md` for the full adapter → schema mapping. For NoSQL adapters, create equivalent collections/tables (see each adapter’s types for the expected schema).
 
-## `challengeStore` (what it is, and what it supports)
+### Start / finish response shape
 
-When **allowImmediateFinalize** is **true**, `challengeStore` is **optional**: if omitted, the WebAuthn challenge is carried in a **signed cookie** instead (you must set **`secret`** for signing). When **allowImmediateFinalize** is false, `challengeStore` is **required**.
+- **Start** returns `{ options: CreationOptions, pendingKey?, pendingToken? }`. Use `options` for `navigator.credentials.create(options)`. When pending strategy is **db** (and not cookie), send **pendingKey** (and **pendingToken** if present) in the **finish** request body. When pending is **cookie**, the server sets a cookie and you do not need to send pendingKey.
+- **Finish** (body): `{ attestation, pendingKey?, pendingToken?, coreId?, email?, ... }`. For **immediate** finalize, include **coreId** (and optional email/data). For **after** strategy, include **pendingKey** (and **pendingToken** if the backend requires it).
+- **Enrich** (`POST /passkey/data`): when the pending backend requires a token (VerificationToken fallback), include **enrichToken** in the body (returned from finish as `enrichToken`).
 
-`challengeStore` is **not an Auth.js provider** and it is **not tied to WebAuthn/Passkey provider IDs**.
-It’s a minimal storage interface used by this package’s custom endpoints to persist the WebAuthn challenge
-between:
+## Legacy / internal
 
-- `POST /webauthn/start` (generate challenge)
-- `POST /webauthn/finish` (verify attestation against expected challenge)
+The following are **not** part of the new unified API but may still be used internally or for migration:
 
-It must support **TTL** (seconds) and **delete on use**.
+- **Challenge stores** (e.g. Redis, KV) are no longer used. Pending state is stored via **adapter** (db) or **cookie** (encrypted, short TTL).
+- **Store factories** (`d1CorePassStore`, `postgresCorePassStore`, `supabaseCorePassStore`) are deprecated; use **corepassD1Adapter**, **corepassPostgresAdapter**, **corepassSupabaseAdapter** and merge with your Auth.js adapter.
 
-### How to wire it to real systems
+### Example: Redis (legacy; not used by new API)
 
-You create/access your KV/Redis client *in your runtime* and pass it into the helper:
-
-- Cloudflare Workers: use an **`env` binding**
-- Node/Next.js/etc: create a **Redis client** using URL/token from env vars
-
-### Example: in-memory (development only)
-
-```ts
-import { memoryChallengeStore } from "authjs-corepass-provider"
-```
-
-### Example: Redis / Upstash
-
-```ts
-import { redisChallengeStore } from "authjs-corepass-provider"
-import { Redis } from "ioredis"
-
-const redis = new Redis(process.env.REDIS_URL!)
-
-const challengeStore = redisChallengeStore({
-    set: (key, value, { ex }) => redis.set(key, value, "EX", ex),
-    get: (key) => redis.get(key),
-    del: (key) => redis.del(key),
-})
-```
+The new API does not use a separate challenge store. Pending state is stored in the **adapter** (table `corepass_pending`) or in an encrypted **cookie**.
 
 ### Example: Cloudflare KV
 
@@ -401,7 +401,6 @@ This adds:
   - **`authenticatorAttachment`**: `"cross-platform"` (default) or `"platform"`.
   - **`residentKey`**: `"preferred"` (default), `"required"`, or `"discouraged"`.
   - **`userVerification`**: `"required"` (default), `"preferred"`, or `"discouraged"`.
-  - **`registrationTimeout`**: milliseconds; default `60000` (60 seconds).
   - **`transports`**: optional array of authenticator transports to request. **Default:** omitted (not set); the browser decides which authenticators to offer. Sent to the client in the registration options; the browser uses it as a **hint** for which kinds of authenticators to prefer or offer. The client is not required to restrict to these—it may still show other authenticators. Each value means:
     - **`internal`**: authenticator is bound to the device (e.g. built-in Touch ID / Face ID, Windows Hello). Typically shown as “this device” or “phone / laptop built-in”.
     - **`hybrid`**: can use a separate device over a combination of transport and proximity (e.g. phone as passkey for a desktop). Often shown as “other device” or “phone” when signing in elsewhere.
@@ -409,8 +408,9 @@ This adds:
     - **`nfc`**: security key over NFC. User taps a hardware key to the device.
     - **`ble`**: security key over Bluetooth Low Energy. User pairs/taps a BLE key.
     If omitted, the browser chooses which authenticators to offer; the authenticator may still report its transports in the attestation (stored for later sign-in hints).
-- **`allowImmediateFinalize`**: if enabled, `finishRegistration` may finalize immediately if `coreId` is provided in the browser payload. This is **disabled by default** because it weakens the CoreID ownership guarantee (the default flow requires the Ed448-signed `/passkey/data` request). When enabled, `HEAD /passkey/data` (checkEnrichment) returns **404** (enrichment not available). When **true**, **`challengeStore`** may be omitted (see **`secret`**).
-- **`secret`**: required when **`allowImmediateFinalize`** is true and **`challengeStore`** is not provided. Used to sign the cookie that carries the WebAuthn challenge between start and finish (no server-side challenge store needed).
+- **`secret`**: **required**. Used to encrypt/sign the pending cookie (when pending strategy is **cookie**) and for VerificationToken-based pending (when using Auth.js VT adapter fallback).
+- **`pending`**: pending state strategy. **`{ strategy: "db" }`** (default): use adapter `setPending`/`consumePending` if present, else Auth.js VerificationToken methods (client must send `pendingToken` from start to finish/enrich). **`{ strategy: "cookie", cookieName?, maxAgeSeconds? }`**: store pending in an encrypted cookie (default TTL 120s). When **finalize** is **immediate**, pending is forced to **cookie**.
+- **`finalize`**: **`{ strategy: "after" }`** (default): registration is finalized only after enrich (`POST /passkey/data` with Ed448 signature). **`{ strategy: "immediate", maxAgeSeconds? }`**: `finishRegistration` can finalize in one roundtrip when `coreId` is provided; forces **pending** to **cookie**; `HEAD /passkey/data` returns **404**.
 - **`emailRequired`**: defaults to `false` (email can arrive later via `/passkey/data`). If no email is provided, the user is created with email undefined; when a real email is provided later it is updated.
 - **`requireO18y`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.o18y=true` or finalization is rejected. Not enforced for immediate-finalize.
 - **`requireO21y`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.o21y=true` or finalization is rejected. Not enforced for immediate-finalize.
@@ -431,8 +431,10 @@ This adds:
   - **`logoutWebhookUrl`**: required if `postLogoutWebhooks: true`.
   - **`logoutWebhookSecret`**: optional. Same signing format/headers as registration.
   - **`logoutWebhookRetries`**: defaults to `3` (range `1-10`). Retries happen on non-2xx responses or network errors.
-- **`pendingTtlSeconds`**: defaults to `600` (10 minutes). Pending registrations expire after this and are dropped.
-- **`timestampWindowMs`**: defaults to `600000` (10 minutes). Enrichment `timestamp` must be within this window.
+- **`time`**: unified timing (all derived from a single flow lifetime):
+  - **`flowLifetimeSeconds`**: canonical flow TTL; default **600** (10 min), or **120** when **finalize.strategy** is **immediate** and not overridden. Drives pending TTL, cookie max-age, and token expiry.
+  - **`registrationTimeoutMs`**: WebAuthn creation/assertion UX timeout; default **60000** (60 s); clamped to ≤ flow lifetime.
+  - **`timestampWindowMs`**: enrichment request timestamp tolerance (ms); default = flow lifetime in ms; clamped to ≥ registrationTimeoutMs and ≤ flow lifetime.
 
 ## Enrichment payload (`/passkey/data`)
 

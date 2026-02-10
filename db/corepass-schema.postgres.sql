@@ -44,3 +44,14 @@ CREATE TABLE IF NOT EXISTS corepass_pending_registrations (
 
 CREATE INDEX IF NOT EXISTS idx_corepass_pending_expires_at
     ON corepass_pending_registrations(expires_at);
+
+-- Unified pending store (key/payload) for pending.strategy "db"
+CREATE TABLE IF NOT EXISTS corepass_pending (
+    key TEXT PRIMARY KEY,
+    payload_json JSONB NOT NULL,
+    expires_at BIGINT NOT NULL,
+    created_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::BIGINT)
+);
+
+CREATE INDEX IF NOT EXISTS idx_corepass_pending_expires
+    ON corepass_pending(expires_at);

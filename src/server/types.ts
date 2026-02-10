@@ -1,11 +1,16 @@
-import type { Adapter, AdapterAccount, AdapterAuthenticator } from "@auth/core/adapters"
+import type { AdapterAccount, AdapterAuthenticator } from "@auth/core/adapters"
+import type { PendingStrategy, FinalizeStrategy } from "../config.js"
+import type { CorePassAdapter } from "../types.js"
+import type { TimeConfigInput } from "../time.js"
 
+/** @deprecated Use pending backend (cookie or db) via createCorePassServer pending config. */
 export type CorePassChallengeStore = {
 	put(key: string, value: string, ttlSeconds: number): Promise<void>
 	get(key: string): Promise<string | null>
 	delete(key: string): Promise<void>
 }
 
+/** @deprecated Internal shape for legacy store payloads. */
 export type CorePassPendingRegistration = {
 	token: string
 	credentialId: string
@@ -21,12 +26,10 @@ export type CorePassPendingRegistration = {
 	expiresAt: number
 }
 
-export type CorePassUserIdentity = {
-	coreId: string
-	userId: string
-	refId: string | null
-}
+/** @deprecated Use CorePassAdapter from "../types.js". */
+export type CorePassUserIdentity = { coreId: string; userId: string; refId: string | null }
 
+/** @deprecated Use CorePassAdapter / profile from "../types.js". */
 export type CorePassProfile = {
 	userId: string
 	coreId: string
@@ -37,234 +40,94 @@ export type CorePassProfile = {
 	providedTill: number | null
 }
 
+/** @deprecated Use CorePassAdapter; legacy store interface for stores.ts. */
 export type CorePassStore = {
 	createPendingRegistration(reg: CorePassPendingRegistration): Promise<void>
-	getPendingRegistrationByCredentialId(
-		credentialId: string
-	): Promise<CorePassPendingRegistration | null>
+	getPendingRegistrationByCredentialId(credentialId: string): Promise<CorePassPendingRegistration | null>
 	deletePendingRegistrationByToken(token: string): Promise<void>
-
 	getIdentityByCoreId(coreId: string): Promise<CorePassUserIdentity | null>
 	getIdentityByUserId?(userId: string): Promise<CorePassUserIdentity | null>
 	upsertIdentity(identity: CorePassUserIdentity): Promise<void>
-
 	upsertProfile(profile: CorePassProfile): Promise<void>
 }
 
+/** Payload stored at start and consumed at finish (challenge + optional email/refId). */
+export type CorePassStartPayload = {
+	challenge: string
+	email: string | null
+	refId: string | null
+}
+
+/** Payload stored after finish for enrich (credential + metadata). */
+export type CorePassPendingRegPayload = {
+	credentialId: string
+	credentialPublicKey: string
+	counter: number
+	credentialDeviceType: string
+	credentialBackedUp: boolean
+	transports: string | null
+	email: string | null
+	refId: string | null
+	aaguid: string | null
+	createdAt: number
+	expiresAt: number
+}
+
 export type CreateCorePassServerOptions = {
-	/**
-	 * Auth.js adapter.
-	 * Used to create users, link the WebAuthn account, and create authenticators.
-	 */
-	adapter: Required<
-		Pick<
-			Adapter,
-			| "createUser"
-			| "getUser"
-			| "updateUser"
-			| "linkAccount"
-			| "getUserByAccount"
-			| "getAuthenticator"
-			| "createAuthenticator"
-		>
-	>
-	/**
-	 * CorePass extension store (pending registrations + CoreID mapping + profile).
-	 */
-	store: CorePassStore
+	/** Unified Auth.js + CorePass adapter. Required. */
+	adapter: CorePassAdapter
 
-	/**
-	 * Store for short-lived WebAuthn challenges (KV/Redis/DB/etc).
-	 * Optional when **allowImmediateFinalize** is true: if omitted, the challenge is carried in a
-	 * signed cookie instead (you must set **secret** for signing).
-	 */
-	challengeStore?: CorePassChallengeStore
+	/** Pending state strategy: "db" (default) or "cookie". */
+	pending?: PendingStrategy
 
-	/**
-	 * Secret for signing the challenge cookie when **allowImmediateFinalize** is true and
-	 * **challengeStore** is not provided. Required in that case.
-	 */
-	secret?: string
+	/** Finalize strategy: "after" (default) or "immediate". */
+	finalize?: FinalizeStrategy
+
+	/** Secret for cookie encryption and VT token encryption. Required. */
+	secret: string
+
+	/** Cookie name for pending (cookie strategy). Defaults to __corepass_pending. */
+	cookieName?: string
 
 	rpID: string
 	rpName: string
 	expectedOrigin: string
 
-	/**
-	 * Enrichment signature must be calculated over this path.
-	 * Defaults to `/passkey/data`.
-	 */
 	signaturePath?: string
-
-	/**
-	 * AAGUID allowlist.
-	 *
-	 * - Default: CorePass AAGUID (`636f7265-7061-7373-6964-656e74696679`)
-	 * - Pass a string (single AAGUID) or an array of AAGUIDs
-	 * - Set to `false` to disable AAGUID checks (allow any authenticator).
-	 */
 	allowedAaguids?: string | string[] | false
-
-	/**
-	 * WebAuthn algorithm preferences (COSE `alg` ids).
-	 *
-	 * Default: `[-257, -7, -8]` (RS256, ES256, Ed25519) like the injector.
-	 */
 	pubKeyCredAlgs?: number[]
-
-	/**
-	 * Registration options (start/finish). Defaults match passkey-friendly, privacy-friendly settings.
-	 */
 	attestationType?: "none" | "indirect" | "direct"
 	authenticatorAttachment?: "platform" | "cross-platform"
 	residentKey?: "discouraged" | "preferred" | "required"
 	userVerification?: "required" | "preferred" | "discouraged"
-	registrationTimeout?: number
-
-	/**
-	 * Optional list of authenticator transports to request (e.g. ["internal", "hybrid"]).
-	 * WebAuthn: "usb" | "nfc" | "ble" | "internal" | "hybrid".
-	 */
 	transports?: ("usb" | "nfc" | "ble" | "internal" | "hybrid")[]
 
-	/**
-	 * If true, finalization fails if the resulting email is missing.
-	 * Defaults to false.
-	 */
 	emailRequired?: boolean
-
-	/**
-	 * Policy flags enforced during the enrich (pending) finalization path only.
-	 * Not enforced for immediate-finalize.
-	 *
-	 * Defaults: false
-	 */
 	requireO18y?: boolean
 	requireO21y?: boolean
 	requireKyc?: boolean
 
-	/**
-	 * TTL for pending registrations (seconds). Defaults to 600 (10 minutes).
-	 */
-	pendingTtlSeconds?: number
+	/** Unified time config (flow lifetime, registration timeout, timestamp window). */
+	time?: TimeConfigInput
 
-	/**
-	 * Enable `refId` support (capture it in start/finish/enrich and store it).
-	 *
-	 * Defaults to `false`.
-	 */
 	enableRefId?: boolean
 
-	/**
-	 * Registration webhook URL to POST after successful finalization.
-	 *
-	 * Payload: `{ coreId, refId? }`
-	 */
 	registrationWebhookUrl?: string
-
-	/**
-	 * Registration webhook secret for HMAC signing. If set, webhook requests will include:
-	 * - `X-Webhook-Timestamp` (unix seconds)
-	 * - `X-Webhook-Signature` (`sha256=<hex>`)
-	 *
-	 * Signature input:
-	 * `timestamp + "\\n" + requestBody`
-	 *
-	 * If unset, webhooks are not signed.
-	 */
 	registrationWebhookSecret?: string
-
-	/**
-	 * Number of registration webhook delivery attempts for a single finalization.
-	 *
-	 * Retries happen when:
-	 * - fetch throws (network error), or
-	 * - response is non-2xx
-	 *
-	 * Allowed range: 1-10
-	 * Default: 3
-	*/
 	registrationWebhookRetries?: number
-
-	/**
-	 * If enabled, POST a registration webhook after finalization:
-	 * - always sends `coreId`
-	 * - includes `refId` only if present
-	 *
-	 * Defaults to `false`.
-	*/
 	postRegistrationWebhooks?: boolean
 
-	/**
-	 * Login webhook URL to POST after successful login.
-	 *
-	 * Payload: `{ coreId, refId? }`
-	 */
 	loginWebhookUrl?: string
-
-	/**
-	 * Login webhook secret for HMAC signing (same header/signature format as registration).
-	 */
 	loginWebhookSecret?: string
-
-	/**
-	 * Number of login webhook delivery attempts. Allowed range: 1-10. Default: 3.
-	 */
 	loginWebhookRetries?: number
-
-	/**
-	 * If enabled, POST a login webhook after successful login.
-	 *
-	 * Defaults to `false`.
-	 */
 	postLoginWebhooks?: boolean
 
-	/**
-	 * Logout webhook URL to POST after logout.
-	 *
-	 * Payload: `{ coreId, refId? }`
-	 */
 	logoutWebhookUrl?: string
-
-	/**
-	 * Logout webhook secret for HMAC signing (same header/signature format as registration).
-	 */
 	logoutWebhookSecret?: string
-
-	/**
-	 * Number of logout webhook delivery attempts. Allowed range: 1-10. Default: 3.
-	 */
 	logoutWebhookRetries?: number
-
-	/**
-	 * If enabled, POST a logout webhook after logout.
-	 *
-	 * Defaults to `false`.
-	 */
 	postLogoutWebhooks?: boolean
 
-	/**
-	 * If enabled, `finishRegistration` may finalize immediately when `coreId` is provided.
-	 * Defaults to false.
-	 *
-	 * Security note: immediate finalization shifts trust to whatever provides `coreId` to the server.
-	 * The default flow requires an Ed448-signed enrichment request to prove CoreID ownership.
-	 */
-	allowImmediateFinalize?: boolean
-
-	/**
-	 * The provider id to use when linking accounts. Defaults to `corepass`.
-	 */
 	providerId?: string
-
-	/**
-	 * Acceptable timestamp window for enrichment requests.
-	 */
-	timestampWindowMs?: number
-
-	/**
-	 * Allowed future skew for enrichment requests.
-	 */
 	timestampFutureSkewMs?: number
 }
 
