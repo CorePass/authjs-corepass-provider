@@ -1,6 +1,6 @@
 {
     "name": "authjs-corepass-provider",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "description": "CorePass provider + pending registration/enrichment helpers for Auth.js (@auth/core)",
     "license": "MIT",
     "repository": {
@@ -50,10 +50,10 @@
         "@simplewebauthn/server": "^13.0.0"
     },
     "devDependencies": {
-        "@auth/core": ">=0.34.3",
-        "@types/node": "^25.2.2",
-        "tsup": "^8.5.1",
-        "typescript": "^5.9.3"
-    }
+		"@auth/core": ">=0.34.3",
+		"@types/node": "^25.2.2",
+		"tsup": "^8.5.1",
+		"typescript": "^5.9.3"
+	}
 }
 
