@@ -514,8 +514,12 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 				expectedRPID: options.rpID,
 				requireUserVerification,
 			})
-		} catch {
-			return withPendingCookieHeaders(json(400, { ok: false, error: "Invalid registration response" }), cookieHeaders)
+		} catch (err) {
+			const detail = err instanceof Error ? err.message : String(err)
+			return withPendingCookieHeaders(
+				json(400, { ok: false, error: "Invalid registration response", detail }),
+				cookieHeaders
+			)
 		}
 
 		if (!verification.verified || !verification.registrationInfo) {

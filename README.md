@@ -230,6 +230,14 @@ Each adapter implements `setPending`/`consumePending` so **pending.strategy "db"
 - **Finish** (body): `{ attestation, pendingKey?, pendingToken?, coreId?, email?, ... }`. For **immediate** finalize, include **coreId** (and optional email/data). For **after** strategy, include **pendingKey** (and **pendingToken** if the backend requires it).
 - **Enrich** (`POST /passkey/data`): when the pending backend requires a token (VerificationToken fallback), include **enrichToken** in the body (returned from finish as `enrichToken`).
 
+### Troubleshooting: 400 "Invalid registration response" on `POST /webauthn/finish`
+
+The error is returned by the **website** (this server) when SimpleWebAuthn’s `verifyRegistrationResponse` throws. The response body includes a **`detail`** field with the underlying error message — inspect the **Network** tab (response payload for `webauthn/finish`) or log `response.json()` in your frontend to see it.
+
+- **Website config**: Ensure **`expectedOrigin`** matches the origin the browser uses (e.g. `https://example.com` vs `http://localhost:3000`). Ensure **`rpID`** matches the host (e.g. `example.com`). Mismatches cause verification to fail.
+- **Challenge / pending**: If the error refers to challenge: the same **pending** (cookie or **pendingKey** + **pendingToken**) from **start** must be available at **finish**. With cookie strategy, the browser must send the cookie; with db strategy, the frontend must send **pendingKey** (and **pendingToken** if required).
+- **CorePass plugin / attestation**: If origin and challenge are correct, the attestation object from the authenticator may be malformed or from an environment that doesn’t match **expectedOrigin** / **expectedRPID** (e.g. plugin running in a different origin or rpID). Use **`detail`** to see the exact SimpleWebAuthn error.
+
 ## Legacy / internal
 
 The following are **not** part of the new unified API but may still be used internally or for migration:
