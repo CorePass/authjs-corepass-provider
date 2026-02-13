@@ -649,7 +649,13 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		if (signatureBytes.length !== 114) return json(400, { ok: false, error: "Invalid signature length" })
 
 		const publicKeyBytes = deriveEd448PublicKeyFromCoreId(coreId)
-		if (!publicKeyBytes) return json(400, { ok: false, error: "Failed to derive public key from CoreID" })
+		if (!publicKeyBytes) {
+			return json(400, {
+				ok: false,
+				error:
+					"Core ID must be in long form (BBAN = 114 hex chars, raw Ed448 public key) for signature verification. Short-form addresses (40 hex BBAN) are valid but cannot be used for enrich.",
+			})
+		}
 
 		const canonicalBody = canonicalizeJSON(body)
 		const signatureInput = canonicalizeForSignature("POST", signaturePath, canonicalBody)

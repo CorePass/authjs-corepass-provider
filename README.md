@@ -451,6 +451,17 @@ The CorePass app sends:
 - **Body**: `{ coreId, credentialId, timestamp, userData }`
 - **Header**: `X-Signature` (Ed448 signature)
 
+### Core ID format for enrich (signature verification)
+
+Core mainnet ICAN (see [go-core](https://github.com/core-coin/go-core)) supports two BBAN forms:
+
+- **Short form**: BBAN = 40 hex chars (20 bytes). Standard on-chain address; valid for identity and immediate finalize. **Cannot** be used for `POST /passkey/data` (see below).
+- **Long form**: BBAN = 114 hex chars (57 bytes) = raw Ed448 public key. **Required** for enrich: the server uses this as the Ed448 public key to verify `X-Signature`.
+
+**Why the long form is required for enrich:** The server must verify the `X-Signature` header (Ed448) over the request. Ed448 verification needs the **exact 57-byte public key** that corresponds to the private key used to sign. The short-form Core ID encodes only a 20-byte value (e.g. a hash or account identifier derived from the key). That 20-byte value is **not** the public key, and the public key **cannot be recovered** from it (the derivation is one-way). So with only a short-form address, the server has no way to obtain the 57-byte key and verification is impossible. The long-form Core ID embeds the raw Ed448 public key in the BBAN, so the server can use it directly to verify the signature. For flows that do not verify a signature (e.g. immediate finalize with `coreId` only), the short form is sufficient.
+
+If the client sends a short-form Core ID to `POST /passkey/data`, the server returns **400** with a message that the Core ID must be in long form for signature verification.
+
 ### Canonical payload + signature input
 
 For signature verification, the server **does not** use the raw request body bytes. Instead it:

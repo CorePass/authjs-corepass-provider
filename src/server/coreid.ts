@@ -44,9 +44,10 @@ export function parseCoreIdIcan(coreId: string): { prefix: "cb"; checksum: strin
 }
 
 /**
- * Default CorePass derivation:
- * - Validate CoreID as mainnet ICAN
- * - Treat BBAN as hex encoding of the raw 57-byte Ed448 public key (114 hex chars)
+ * Core ICAN (go-core) has two BBAN forms:
+ * - Short form: BBAN = 40 hex chars (20 bytes), standard mainnet address. Cannot derive Ed448 public key.
+ * - Long form: BBAN = 114 hex chars (57 bytes) = raw Ed448 public key. Required for signature verification.
+ * Returns the raw Ed448 public key only when BBAN is 57 bytes; otherwise null (e.g. short-form address).
  */
 export function deriveEd448PublicKeyFromCoreId(coreId: string): Uint8Array | null {
 	if (!validateCoreIdMainnet(coreId)) return null
@@ -55,6 +56,7 @@ export function deriveEd448PublicKeyFromCoreId(coreId: string): Uint8Array | nul
 
 	const pk = hexToBytes(parts.bban)
 	if (!pk) return null
+	// Only 57-byte BBAN (114 hex) is the raw Ed448 public key; 20-byte BBAN (40 hex) is short form, cannot verify
 	if (pk.length !== 57) return null
 	return pk
 }
