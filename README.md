@@ -450,6 +450,18 @@ The CorePass app sends:
 
 - **Body**: `{ coreId, credentialId, timestamp, userData }`
 - **Header**: `X-Signature` (Ed448 signature)
+- **Header** (optional): `X-Public-Key` — raw Ed448 public key (57 bytes) as 114 hex chars or base64. If provided, it is used for signature verification instead of deriving the key from `coreId`. Use this with short-form (44-char) Core ID.
+
+### Core ID format for enrich (signature verification)
+
+Core mainnet ICAN (see [go-core](https://github.com/core-coin/go-core)) supports two BBAN forms:
+
+- **Short form**: BBAN = 40 hex chars (20 bytes). Standard on-chain address; valid for identity and immediate finalize. **Cannot** be used for `POST /passkey/data` (see below).
+- **Long form**: BBAN = 114 hex chars (57 bytes) = raw Ed448 public key. **Required** for enrich: the server uses this as the Ed448 public key to verify `X-Signature`.
+
+**Why the long form or `X-Public-Key` is needed for enrich:** The server must verify the `X-Signature` header (Ed448) over the request. Ed448 verification needs the **exact 57-byte public key** that corresponds to the private key used to sign. The short-form Core ID encodes only a 20-byte value (e.g. a hash or account identifier derived from the key). That 20-byte value is **not** the public key, and the public key **cannot be recovered** from it (the derivation is one-way). So with only a short-form address, the server has no way to obtain the 57-byte key unless the client provides it. You can either: (1) send **`X-Public-Key`** (57 bytes as 114 hex or base64) — the server uses it when present and allows short-form `coreId`; or (2) use a **long-form Core ID** (BBAN = 114 hex chars), which embeds the public key. For flows that do not verify a signature (e.g. immediate finalize with `coreId` only), the short form is sufficient.
+
+If the client sends a short-form Core ID and no valid `X-Public-Key`, the server returns **400** with a message that the public key must be provided via header or long-form Core ID.
 
 ### Canonical payload + signature input
 

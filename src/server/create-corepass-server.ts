@@ -8,7 +8,7 @@ import { getCookie, setCookieHeader, deleteCookieHeader } from "../http/cookies.
 import { base64UrlToBytes, bytesToBase64, bytesToBase64Url, normalizeCredentialId } from "./base64.js"
 import { canonicalizeForSignature, canonicalizeJSON } from "./canonical-json.js"
 import { deriveEd448PublicKeyFromCoreId, validateCoreIdMainnet } from "./coreid.js"
-import { parseEd448Signature, verifyEd448Signature } from "./ed448.js"
+import { parseEd448PublicKey, parseEd448Signature, verifyEd448Signature } from "./ed448.js"
 import { extractAaguidFromAttestationObject, validateAaguidAllowlist } from "./aaguid.js"
 
 import { resolvePasskeyUserId } from "../utils/userId.js"
@@ -648,8 +648,17 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		if (!signatureBytes) return json(400, { ok: false, error: "Invalid signature format" })
 		if (signatureBytes.length !== 114) return json(400, { ok: false, error: "Invalid signature length" })
 
-		const publicKeyBytes = deriveEd448PublicKeyFromCoreId(coreId)
-		if (!publicKeyBytes) return json(400, { ok: false, error: "Failed to derive public key from CoreID" })
+		const publicKeyHeader = req.headers.get("X-Public-Key")
+		let publicKeyBytes: Uint8Array | null =
+			publicKeyHeader !== null && publicKeyHeader !== "" ? parseEd448PublicKey(publicKeyHeader) : null
+		if (!publicKeyBytes) publicKeyBytes = deriveEd448PublicKeyFromCoreId(coreId)
+		if (!publicKeyBytes) {
+			return json(400, {
+				ok: false,
+				error:
+					"Ed448 public key required for signature verification: provide X-Public-Key header (57 bytes, 114 hex or base64) or use long-form Core ID (BBAN = 114 hex chars).",
+			})
+		}
 
 		const canonicalBody = canonicalizeJSON(body)
 		const signatureInput = canonicalizeForSignature("POST", signaturePath, canonicalBody)

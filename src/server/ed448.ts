@@ -24,6 +24,19 @@ export function parseEd448Signature(signature: string): Uint8Array | null {
 	return tryDecodeBase64OrBase64Url(s)
 }
 
+/** Ed448 public key is 57 bytes. Accepts 114 hex chars or base64/base64url. */
+export function parseEd448PublicKey(value: string): Uint8Array | null {
+	if (typeof value !== "string") return null
+	const s = value.trim()
+	if (!s) return null
+
+	let bytes: Uint8Array | null
+	if (isHex(s)) bytes = hexToBytes(s)
+	else bytes = tryDecodeBase64OrBase64Url(s)
+	if (!bytes || bytes.length !== 57) return null
+	return bytes
+}
+
 async function verifyWithWebCrypto(
 	publicKeyBytes: Uint8Array,
 	messageBytes: Uint8Array,
