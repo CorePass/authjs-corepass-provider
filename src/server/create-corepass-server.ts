@@ -5,7 +5,7 @@ import { resolveConfig } from "../config.js"
 import { resolveTimeConfig } from "../time.js"
 import { makePendingBackend, isPendingBackendWithToken } from "../pending/index.js"
 import { getCookie, setCookieHeader, deleteCookieHeader } from "../http/cookies.js"
-import { base64UrlToBytes, bytesToBase64, bytesToBase64Url, normalizeCredentialId } from "./base64.js"
+import { bytesToBase64, bytesToBase64Url, normalizeCredentialId } from "./base64.js"
 import { canonicalizeForSignature, canonicalizeJSON } from "./canonical-json.js"
 import { deriveEd448PublicKeyFromCoreId, validateCoreIdMainnet } from "./coreid.js"
 import { parseEd448PublicKey, parseEd448Signature, verifyEd448Signature } from "./ed448.js"
@@ -45,10 +45,6 @@ function randomBytes(n: number): Uint8Array {
 	const a = new Uint8Array(n)
 	crypto.getRandomValues(a)
 	return a
-}
-
-function randomChallenge(): string {
-	return bytesToBase64Url(randomBytes(32))
 }
 
 function parseEmail(input: unknown): string | null {
@@ -393,7 +389,8 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			return json(400, { ok: false, error: message })
 		}
 
-		const challenge = randomChallenge()
+		const challengeBytes = randomBytes(32)
+		const challenge = bytesToBase64Url(challengeBytes)
 		const payload: CorePassStartPayload = { challenge, email, refId }
 		const expiresAt = new Date(Date.now() + time.flowExpiresInMs)
 		const useCookie = resolved.pending.strategy === "cookie"
@@ -438,8 +435,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			userID: userIdResolution.userIdBytes,
 			userName: options.defaultUserName ?? email ?? "CorePass",
 			userDisplayName: options.defaultUserDisplayName ?? email ?? "CorePass User",
-			// Pass raw bytes so SimpleWebAuthn v13 does not double base64url-encode (string is treated as UTF-8 and re-encoded)
-			challenge: base64UrlToBytes(challenge),
+			challenge: challengeBytes,
 			pubKeyCredParams: pubKeyCredAlgs.map((alg) => ({ alg, type: "public-key" })),
 			authenticatorSelection,
 			attestationType,
