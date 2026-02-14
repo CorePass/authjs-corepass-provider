@@ -513,6 +513,9 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			})
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err)
+			if (typeof console !== "undefined" && console.error) {
+				console.error("[CorePass] verifyRegistrationResponse failed:", detail)
+			}
 			return withPendingCookieHeaders(
 				json(400, { ok: false, error: "Invalid registration response", detail }),
 				cookieHeaders
