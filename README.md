@@ -411,7 +411,7 @@ This adds:
 ## Options
 
 - **`allowedAaguids`**: defaults to CorePass AAGUID `636f7265-7061-7373-6964-656e74696679`. Pass a string or an array of AAGUIDs. Set to `false` to allow any authenticator.
-- **`pubKeyCredAlgs`**: defaults to `[-257, -7, -8]` (RS256, ES256, Ed25519).
+- **`pubKeyCredAlgs`**: COSE algorithm ID(s) for `pubKeyCredParams`. Single value (e.g. `-7`) or array (e.g. `[-7, -8]`). Default: all WebAuthn-relevant signature algorithms. Override to restrict or reorder.
 - **WebAuthn registration options** (optional overrides; defaults are passkey-friendly and privacy-friendly):
   - **`attestationType`**: `"none"` (default), `"indirect"`, or `"direct"`.
   - **`authenticatorAttachment`**: `"cross-platform"` (default) or `"platform"`.

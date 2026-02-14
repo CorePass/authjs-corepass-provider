@@ -22,6 +22,25 @@ import type {
 
 const COREPASS_DEFAULT_AAGUID = "636f7265-7061-7373-6964-656e74696679"
 
+/** All WebAuthn-relevant COSE signature algorithm IDs for pubKeyCredParams (passkey). Order: common first. */
+const DEFAULT_PUBKEY_CRED_ALGS: number[] = [
+	-7,   // ES256 (ECDSA P-256 SHA-256) – most common for passkeys
+	-8,   // EdDSA (Ed25519)
+	-257, // RS256 (RSA PKCS1-v1_5 SHA-256)
+	-258, // RS384
+	-259, // RS512
+	-37,  // PS256 (RSA PSS SHA-256)
+	-38,  // PS384
+	-39,  // PS512
+	-35,  // ES384 (ECDSA P-384)
+	-36,  // ES512 (ECDSA P-521)
+	-47,  // ES256K (secp256k1)
+	-51,  // ESP384 (ECDSA P-384 SHA-384)
+	-52,  // ESP512 (ECDSA P-521 SHA-512)
+	-53,  // Ed448
+	-19,  // Ed25519 (explicit)
+]
+
 function nowMs(): number {
 	return Date.now()
 }
@@ -221,7 +240,13 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 	const signaturePath = options.signaturePath ?? "/passkey/data"
 	const timestampFutureSkewMs = options.timestampFutureSkewMs ?? 2 * 60 * 1000
 	const allowedAaguids = options.allowedAaguids ?? COREPASS_DEFAULT_AAGUID
-	const pubKeyCredAlgs = options.pubKeyCredAlgs ?? [-257, -7, -8]
+	const pubKeyCredAlgsRaw = options.pubKeyCredAlgs ?? DEFAULT_PUBKEY_CRED_ALGS
+	const pubKeyCredAlgs =
+		typeof pubKeyCredAlgsRaw === "number"
+			? [pubKeyCredAlgsRaw]
+			: Array.isArray(pubKeyCredAlgsRaw)
+				? pubKeyCredAlgsRaw
+				: DEFAULT_PUBKEY_CRED_ALGS
 	const pendingCookieName = resolved.pending.strategy === "cookie" ? resolved.pending.cookieName : "__corepass_pending"
 
 	const sw = WebAuthn({}).simpleWebAuthn
@@ -456,6 +481,14 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		const body = (await req.json().catch(() => null)) as Record<string, unknown>
 		const attestation = body?.attestation
 		if (!attestation) return json(400, { ok: false, error: "Bad request" })
+		const response = (attestation as { response?: { clientDataJSON?: string; attestationObject?: string } })?.response
+		if (!response || typeof response.clientDataJSON !== "string") {
+			return json(400, {
+				ok: false,
+				error: "Invalid registration response",
+				detail: "Attestation missing response.clientDataJSON (expected base64url string)",
+			})
+		}
 
 		const useCookie = resolved.pending.strategy === "cookie"
 		const pendingKey = useCookie ? "reg" : (typeof body?.pendingKey === "string" ? body.pendingKey.trim() : null)
@@ -502,13 +535,27 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		}
 
 		const requireUserVerification = options.userVerification !== "discouraged"
+		const expectedOrigin = options.expectedOrigin
+		const expectedRPID = options.rpID
+		if (typeof expectedOrigin !== "string" || !expectedOrigin) {
+			return withPendingCookieHeaders(
+				json(400, { ok: false, error: "Invalid registration response", detail: "expectedOrigin is missing or invalid" }),
+				cookieHeaders
+			)
+		}
+		if (typeof expectedRPID !== "string" || !expectedRPID) {
+			return withPendingCookieHeaders(
+				json(400, { ok: false, error: "Invalid registration response", detail: "rpID is missing or invalid" }),
+				cookieHeaders
+			)
+		}
 		let verification: Awaited<ReturnType<(typeof sw)["verifyRegistrationResponse"]>>
 		try {
 			verification = await sw.verifyRegistrationResponse({
 				response: attestation,
 				expectedChallenge,
-				expectedOrigin: options.expectedOrigin,
-				expectedRPID: options.rpID,
+				expectedOrigin,
+				expectedRPID,
 				requireUserVerification,
 			})
 		} catch (err) {

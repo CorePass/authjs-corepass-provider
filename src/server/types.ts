@@ -102,7 +102,8 @@ export type CreateCorePassServerOptions = {
 
 	signaturePath?: string
 	allowedAaguids?: string | string[] | false
-	pubKeyCredAlgs?: number[]
+	/** COSE algorithm ID(s) for pubKeyCredParams. Single value or array. */
+	pubKeyCredAlgs?: number | number[]
 	attestationType?: "none" | "indirect" | "direct"
 	authenticatorAttachment?: "platform" | "cross-platform"
 	residentKey?: "discouraged" | "preferred" | "required"
