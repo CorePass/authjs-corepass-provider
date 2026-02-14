@@ -438,7 +438,8 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			userID: userIdResolution.userIdBytes,
 			userName: options.defaultUserName ?? email ?? "CorePass",
 			userDisplayName: options.defaultUserDisplayName ?? email ?? "CorePass User",
-			challenge,
+			// Pass raw bytes so SimpleWebAuthn v13 does not double base64url-encode (string is treated as UTF-8 and re-encoded)
+			challenge: base64UrlToBytes(challenge),
 			pubKeyCredParams: pubKeyCredAlgs.map((alg) => ({ alg, type: "public-key" })),
 			authenticatorSelection,
 			attestationType,
