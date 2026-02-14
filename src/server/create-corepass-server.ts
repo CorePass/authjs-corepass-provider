@@ -489,6 +489,14 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 				detail: "Attestation missing response.clientDataJSON (expected base64url string)",
 			})
 		}
+		const attestationObjectB64 = response.attestationObject
+		if (typeof attestationObjectB64 !== "string" || !attestationObjectB64.length) {
+			return json(400, {
+				ok: false,
+				error: "Invalid registration response",
+				detail: "Attestation missing response.attestationObject (expected base64url string)",
+			})
+		}
 
 		const useCookie = resolved.pending.strategy === "cookie"
 		const pendingKey = useCookie ? "reg" : (typeof body?.pendingKey === "string" ? body.pendingKey.trim() : null)
@@ -522,9 +530,15 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			return withPendingCookieHeaders(json(400, { ok: false, error: "Challenge expired or invalid" }), cookieHeaders)
 		}
 		const expectedChallenge = saved.challenge
+		if (typeof expectedChallenge !== "string" || !expectedChallenge.length) {
+			return withPendingCookieHeaders(
+				json(400, { ok: false, error: "Invalid registration response", detail: "Expected challenge is missing or empty" }),
+				cookieHeaders
+			)
+		}
 
 		// Validate AAGUID allowlist (CorePass app gate)
-		const aaguid = extractAaguidFromAttestationObject((attestation as { response?: { attestationObject?: string } })?.response?.attestationObject)
+		const aaguid = extractAaguidFromAttestationObject(attestationObjectB64)
 		if (!validateAaguidAllowlist(aaguid, allowedAaguids)) {
 			return withPendingCookieHeaders(json(400, {
 				ok: false,
