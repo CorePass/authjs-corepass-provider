@@ -5,7 +5,7 @@ import { resolveConfig } from "../config.js"
 import { resolveTimeConfig } from "../time.js"
 import { makePendingBackend, isPendingBackendWithToken } from "../pending/index.js"
 import { getCookie, setCookieHeader, deleteCookieHeader } from "../http/cookies.js"
-import { bytesToBase64, bytesToBase64Url, normalizeCredentialId } from "./base64.js"
+import { bytesToBase64, bytesToBase64Url, base64UrlToBytes, normalizeCredentialId } from "./base64.js"
 import { canonicalizeForSignature, canonicalizeJSON } from "./canonical-json.js"
 import { deriveEd448PublicKeyFromCoreId, validateCoreIdMainnet } from "./coreid.js"
 import { parseEd448PublicKey, parseEd448Signature, verifyEd448Signature } from "./ed448.js"
@@ -587,15 +587,16 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			return withPendingCookieHeaders(json(400, { ok: false, error: "Registration not verified" }), cookieHeaders)
 		}
 
-		const credentialIdBase64 = bytesToBase64(verification.registrationInfo.credentialID)
-		const credentialPublicKeyBase64 = bytesToBase64(verification.registrationInfo.credentialPublicKey)
-		const transports = transportsToString((attestation as any)?.response?.transports)
+		const credential = verification.registrationInfo.credential
+		const credentialIdBase64 = bytesToBase64(base64UrlToBytes(credential.id))
+		const credentialPublicKeyBase64 = bytesToBase64(credential.publicKey)
+		const transports = transportsToString(credential.transports ?? (attestation as any)?.response?.transports)
 
 		const authenticator: Omit<AdapterAuthenticator, "userId"> = {
 			providerAccountId: credentialIdBase64,
 			credentialID: credentialIdBase64,
 			credentialPublicKey: credentialPublicKeyBase64,
-			counter: verification.registrationInfo.counter,
+			counter: credential.counter,
 			credentialDeviceType: verification.registrationInfo.credentialDeviceType,
 			credentialBackedUp: verification.registrationInfo.credentialBackedUp,
 			transports,
