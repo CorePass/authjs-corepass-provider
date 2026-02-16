@@ -137,6 +137,14 @@ export type CreateCorePassServerOptions = {
 
 	providerId?: string
 	timestampFutureSkewMs?: number
+
+	/**
+	 * Core ID validation: true | false | 'auto'. Default 'auto'.
+	 * - false: skip validation.
+	 * - true: same as 'auto'.
+	 * - 'auto': detect by regex (cb|ce|ab)+2-digit+40hex; cb→mainnet, ab→testnet, ce→enterprise.
+	 */
+	validateCoreID?: boolean | "auto"
 }
 
 export type CorePassFinalizeArgs = {

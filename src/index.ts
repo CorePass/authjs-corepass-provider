@@ -28,7 +28,11 @@ export {
 } from "./pending/index.js"
 
 export { createCorePassServer } from "./server/create-corepass-server.js"
-export { validateCoreIdMainnet, deriveEd448PublicKeyFromCoreId } from "./server/coreid.js"
+export {
+	validateCoreIdMainnet,
+	validateCoreIdWithSettings,
+	deriveEd448PublicKeyFromCoreId,
+} from "./server/coreid.js"
 
 export { corepassPostgresAdapter } from "./adapters/postgres.js"
 export { corepassD1Adapter } from "./adapters/d1.js"
