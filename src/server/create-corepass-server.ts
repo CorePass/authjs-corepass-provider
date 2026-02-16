@@ -438,6 +438,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 
 		const attestationType = options.attestationType ?? "none"
 		const authenticatorAttachment = options.authenticatorAttachment ?? "cross-platform"
+		const preferredAuthenticatorType = options.preferredAuthenticatorType
 		const residentKey = options.residentKey ?? "preferred"
 		const userVerification = options.userVerification ?? "required"
 		const transports = options.transports && options.transports.length > 0 ? options.transports : undefined
@@ -466,6 +467,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			attestationType,
 			timeout: time.registrationTimeoutMs,
 			excludeCredentials: [],
+			...(preferredAuthenticatorType && { preferredAuthenticatorType }),
 		})
 
 		const responseBody: Record<string, unknown> = { options: creationOptions }
@@ -563,6 +565,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 				cookieHeaders
 			)
 		}
+		const attestationSafetyNetEnforceCTSCheck = options.attestationSafetyNetEnforceCTSCheck ?? true
 		let verification: Awaited<ReturnType<(typeof sw)["verifyRegistrationResponse"]>>
 		try {
 			verification = await sw.verifyRegistrationResponse({
@@ -571,6 +574,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 				expectedOrigin,
 				expectedRPID,
 				requireUserVerification,
+				attestationSafetyNetEnforceCTSCheck,
 			})
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err)

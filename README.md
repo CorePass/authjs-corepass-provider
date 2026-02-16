@@ -415,6 +415,7 @@ This adds:
 - **WebAuthn registration options** (optional overrides; defaults are passkey-friendly and privacy-friendly):
   - **`attestationType`**: `"none"` (default), `"indirect"`, or `"direct"`.
   - **`authenticatorAttachment`**: `"cross-platform"` (default) or `"platform"`.
+  - **`preferredAuthenticatorType`** (v13): Encourage the browser to prompt for a specific type. **`"securityKey"`** (hardware key), **`"localDevice"`** (platform authenticator on this device), **`"remoteDevice"`** (phone/cross-device). When set, the server adds the corresponding **hints** to registration options and the client’s `startRegistration()` uses them.
   - **`residentKey`**: `"preferred"` (default), `"required"`, or `"discouraged"`.
   - **`userVerification`**: `"required"` (default), `"preferred"`, or `"discouraged"`.
   - **`transports`**: optional array of authenticator transports to request. **Default:** omitted (not set); the browser decides which authenticators to offer. Sent to the client in the registration options; the browser uses it as a **hint** for which kinds of authenticators to prefer or offer. The client is not required to restrict to these—it may still show other authenticators. Each value means:
@@ -424,6 +425,7 @@ This adds:
     - **`nfc`**: security key over NFC. User taps a hardware key to the device.
     - **`ble`**: security key over Bluetooth Low Energy. User pairs/taps a BLE key.
     If omitted, the browser chooses which authenticators to offer; the authenticator may still report its transports in the attestation (stored for later sign-in hints).
+- **`attestationSafetyNetEnforceCTSCheck`**: When **`true`** (default), require that an Android device’s system integrity has not been tampered with if it uses SafetyNet attestation. Set to **`false`** to allow attestation without the CTS profile check. Passed to SimpleWebAuthn’s `verifyRegistrationResponse`. v13 improves attestation verification (e.g. intermediate certificates as trust anchors) internally; this option only controls the SafetyNet CTS check.
 - **`secret`**: **required**. Used to encrypt/sign the pending cookie (when pending strategy is **cookie**) and for VerificationToken-based pending (when using Auth.js VT adapter fallback).
 - **`pending`**: pending state strategy. **`{ strategy: "db" }`** (default): use adapter `setPending`/`consumePending` if present, else Auth.js VerificationToken methods (client must send `pendingToken` from start to finish/enrich). **`{ strategy: "cookie", cookieName?, maxAgeSeconds? }`**: store pending in an encrypted cookie (default TTL 120s). When **finalize** is **immediate**, pending is forced to **cookie**.
 - **`finalize`**: **`{ strategy: "after" }`** (default): registration is finalized only after enrich (`POST /passkey/data` with Ed448 signature). **`{ strategy: "immediate", maxAgeSeconds? }`**: `finishRegistration` can finalize in one roundtrip when `coreId` is provided; forces **pending** to **cookie**; `HEAD /passkey/data` returns **404**.

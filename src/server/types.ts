@@ -106,9 +106,13 @@ export type CreateCorePassServerOptions = {
 	pubKeyCredAlgs?: number | number[]
 	attestationType?: "none" | "indirect" | "direct"
 	authenticatorAttachment?: "platform" | "cross-platform"
+	/** v13: Encourage browser to prompt for this authenticator type; sets hints in options. */
+	preferredAuthenticatorType?: "securityKey" | "localDevice" | "remoteDevice"
 	residentKey?: "discouraged" | "preferred" | "required"
 	userVerification?: "required" | "preferred" | "discouraged"
 	transports?: ("usb" | "nfc" | "ble" | "internal" | "hybrid")[]
+	/** Require Android SafetyNet CTS profile match when using SafetyNet attestation. Default true. */
+	attestationSafetyNetEnforceCTSCheck?: boolean
 
 	emailRequired?: boolean
 	requireO18y?: boolean
