@@ -5,9 +5,9 @@ import { resolveConfig } from "../config.js"
 import { resolveTimeConfig } from "../time.js"
 import { makePendingBackend, isPendingBackendWithToken } from "../pending/index.js"
 import { getCookie, setCookieHeader, deleteCookieHeader } from "../http/cookies.js"
-import { bytesToBase64, bytesToBase64Url, normalizeCredentialId } from "./base64.js"
+import { base64UrlToBytes, bytesToBase64, bytesToBase64Url, normalizeCredentialId } from "./base64.js"
 import { canonicalizeForSignature, canonicalizeJSON } from "./canonical-json.js"
-import { deriveEd448PublicKeyFromCoreId, validateCoreIdMainnet } from "./coreid.js"
+import { deriveEd448PublicKeyFromCoreId, validateCoreIdWithSettings } from "./coreid.js"
 import { parseEd448PublicKey, parseEd448Signature, verifyEd448Signature } from "./ed448.js"
 import { extractAaguidFromAttestationObject, validateAaguidAllowlist } from "./aaguid.js"
 
@@ -247,7 +247,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			: Array.isArray(pubKeyCredAlgsRaw)
 				? pubKeyCredAlgsRaw
 				: DEFAULT_PUBKEY_CRED_ALGS
-	const pendingCookieName = resolved.pending.strategy === "cookie" ? resolved.pending.cookieName : "__corepass_pending"
+	const validateCoreID = options.validateCoreID ?? "auto"
 
 	const sw = WebAuthn({}).simpleWebAuthn
 
@@ -587,25 +587,50 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			return withPendingCookieHeaders(json(400, { ok: false, error: "Registration not verified" }), cookieHeaders)
 		}
 
-		const credentialIdBase64 = bytesToBase64(verification.registrationInfo.credentialID)
-		const credentialPublicKeyBase64 = bytesToBase64(verification.registrationInfo.credentialPublicKey)
-		const transports = transportsToString((attestation as any)?.response?.transports)
+		const info = verification.registrationInfo
+		// v13: credential.id (base64url string), credential.publicKey (Uint8Array), credential.counter. v9: top-level credentialID, credentialPublicKey, counter.
+		const credentialIdBase64 =
+			info.credential != null
+				? bytesToBase64(
+						typeof (info.credential as { id?: string }).id === "string"
+							? base64UrlToBytes((info.credential as { id: string }).id)
+							: new Uint8Array(0)
+					)
+				: bytesToBase64((info as { credentialID?: Uint8Array }).credentialID ?? new Uint8Array(0))
+		const credentialPublicKeyBase64 =
+			info.credential != null
+				? bytesToBase64((info.credential as { publicKey: Uint8Array }).publicKey)
+				: bytesToBase64((info as { credentialPublicKey?: Uint8Array }).credentialPublicKey ?? new Uint8Array(0))
+		const counter =
+			info.credential != null
+				? (info.credential as { counter: number }).counter
+				: (info as { counter?: number }).counter ?? 0
+		const transports = transportsToString(
+			(info.credential != null ? (info.credential as { transports?: unknown }).transports : undefined) ??
+				(attestation as any)?.response?.transports
+		)
+		if (!credentialIdBase64 || !credentialPublicKeyBase64) {
+			return withPendingCookieHeaders(
+				json(400, { ok: false, error: "Invalid registration response", detail: "Missing credential ID or public key" }),
+				cookieHeaders
+			)
+		}
 
 		const authenticator: Omit<AdapterAuthenticator, "userId"> = {
 			providerAccountId: credentialIdBase64,
 			credentialID: credentialIdBase64,
 			credentialPublicKey: credentialPublicKeyBase64,
-			counter: verification.registrationInfo.counter,
-			credentialDeviceType: verification.registrationInfo.credentialDeviceType,
-			credentialBackedUp: verification.registrationInfo.credentialBackedUp,
+			counter,
+			credentialDeviceType: info.credentialDeviceType,
+			credentialBackedUp: info.credentialBackedUp,
 			transports,
 		}
 
 		const coreIdFromBody = typeof body?.coreId === "string" ? body.coreId.trim() : null
 
 		if (finalizeImmediate && coreIdFromBody) {
-			if (!validateCoreIdMainnet(coreIdFromBody)) {
-				return withPendingCookieHeaders(json(400, { ok: false, error: "Invalid Core ID (mainnet)" }), cookieHeaders)
+			if (!validateCoreIdWithSettings(coreIdFromBody, validateCoreID)) {
+				return withPendingCookieHeaders(json(400, { ok: false, error: "Invalid Core ID" }), cookieHeaders)
 			}
 
 			const emailFromBody = parseEmail(body?.email)
@@ -688,8 +713,8 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			return json(400, { ok: false, error: "Missing enrichToken (required for this pending backend)" })
 		}
 
-		if (!validateCoreIdMainnet(coreId)) {
-			return json(400, { ok: false, error: "Invalid Core ID (mainnet)" })
+		if (!validateCoreIdWithSettings(coreId, validateCoreID)) {
+			return json(400, { ok: false, error: "Invalid Core ID" })
 		}
 
 		const credentialIdNormalized = normalizeCredentialId(credentialIdRaw)
@@ -716,7 +741,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		const publicKeyHeader = req.headers.get("X-Public-Key")
 		let publicKeyBytes: Uint8Array | null =
 			publicKeyHeader !== null && publicKeyHeader !== "" ? parseEd448PublicKey(publicKeyHeader) : null
-		if (!publicKeyBytes) publicKeyBytes = deriveEd448PublicKeyFromCoreId(coreId)
+		if (!publicKeyBytes) publicKeyBytes = deriveEd448PublicKeyFromCoreId(coreId, (id) => validateCoreIdWithSettings(id, validateCoreID))
 		if (!publicKeyBytes) {
 			return json(400, {
 				ok: false,

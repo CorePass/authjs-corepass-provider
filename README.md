@@ -47,7 +47,7 @@ sequenceDiagram
 
   A->>S: POST /passkey/data {coreId, credentialId, timestamp, userData} + X-Signature (Ed448)
   Note over A,S: Only when enrichment available (HEAD returned 200)
-  S->>S: validateCoreIdMainnet + timestamp window
+  S->>S: validateCoreID (settings) + timestamp window
   S->>S: verify Ed448 signature over canonical JSON
   S->>Adapter: consumePending(credentialId) / consumeWithToken(…)
   S->>Adapter: create/link Auth.js user+account+authenticator
@@ -432,6 +432,7 @@ This adds:
 - **`requireO21y`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.o21y=true` or finalization is rejected. Not enforced for immediate-finalize.
 - **`requireKyc`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.kyc=true` or finalization is rejected. Not enforced for immediate-finalize.
 - **`enableRefId`**: defaults to `false`. When enabled, the server generates and stores a `refId` (UUIDv4) for the CoreID identity and can include it in webhooks. When disabled, no `refId` is generated or stored.
+- **`validateCoreID`**: Core ID validation mode. **`'auto'`** (default): detect by regex `^(cb|ce|ab)[0-9]{2}[a-f0-9]{40}$/i` — **cb** → mainnet, **ab** → testnet (Devin), **ce** → enterprise (Koliba); then validate via [blockchain-wallet-validator](https://github.com/sergical/blockchain-wallet-validator). **`true`**: same as `'auto'`. **`false`**: skip validation (accept any string). Used on finish (immediate finalize with `coreId`) and on enrich (`POST /passkey/data`).
 - **Registration webhook options**:
   - **`postRegistrationWebhooks`**: defaults to `false`.
   - **`registrationWebhookUrl`**: required if `postRegistrationWebhooks: true`.
