@@ -588,33 +588,17 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		}
 
 		const info = verification.registrationInfo
-		// v13: credential.id (base64url string), credential.publicKey (Uint8Array), credential.counter. v9: top-level credentialID, credentialPublicKey, counter.
-		const credentialIdBase64 =
-			info.credential != null
-				? bytesToBase64(
-						typeof (info.credential as { id?: string }).id === "string"
-							? base64UrlToBytes((info.credential as { id: string }).id)
-							: new Uint8Array(0)
-					)
-				: bytesToBase64((info as { credentialID?: Uint8Array }).credentialID ?? new Uint8Array(0))
-		const credentialPublicKeyBase64 =
-			info.credential != null
-				? bytesToBase64((info.credential as { publicKey: Uint8Array }).publicKey)
-				: bytesToBase64((info as { credentialPublicKey?: Uint8Array }).credentialPublicKey ?? new Uint8Array(0))
-		const counter =
-			info.credential != null
-				? (info.credential as { counter: number }).counter
-				: (info as { counter?: number }).counter ?? 0
-		const transports = transportsToString(
-			(info.credential != null ? (info.credential as { transports?: unknown }).transports : undefined) ??
-				(attestation as any)?.response?.transports
-		)
-		if (!credentialIdBase64 || !credentialPublicKeyBase64) {
+		const cred = info.credential
+		if (!cred) {
 			return withPendingCookieHeaders(
-				json(400, { ok: false, error: "Invalid registration response", detail: "Missing credential ID or public key" }),
+				json(400, { ok: false, error: "Invalid registration response", detail: "Missing credential (SimpleWebAuthn v13)" }),
 				cookieHeaders
 			)
 		}
+		const credentialIdBase64 = bytesToBase64(base64UrlToBytes(cred.id))
+		const credentialPublicKeyBase64 = bytesToBase64(cred.publicKey)
+		const counter = cred.counter
+		const transports = transportsToString(cred.transports ?? (attestation as any)?.response?.transports)
 
 		const authenticator: Omit<AdapterAuthenticator, "userId"> = {
 			providerAccountId: credentialIdBase64,
