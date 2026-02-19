@@ -1,6 +1,6 @@
 {
     "name": "authjs-corepass-provider",
-    "version": "0.2.9",
+    "version": "0.2.10",
     "description": "CorePass provider + pending registration/enrichment helpers for Auth.js (@auth/core)",
     "license": "MIT",
     "repository": {
