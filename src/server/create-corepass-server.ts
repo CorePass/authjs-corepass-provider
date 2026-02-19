@@ -515,7 +515,9 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		const headerRecordFinish = Object.fromEntries(req.headers.entries()) as Record<string, string | string[] | undefined>
 		const cookieAccess = {
 			getCookie: (name: string) => getCookie(headerRecordFinish, name),
-			setCookieHeader: () => {},
+			setCookieHeader: (name: string, value: string, opts?: { maxAge: number; path?: string }) => {
+				cookieHeaders.push(setCookieHeader(name, value, { ...opts, path: opts?.path ?? "/" }))
+			},
 			deleteCookieHeader: (name: string) => {
 				cookieHeaders.push(deleteCookieHeader(name, "/"))
 			},
@@ -669,7 +671,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			expiresAt: expiresAtSec,
 		}
 		const enrichExpiresAt = new Date(Date.now() + time.flowExpiresInMs)
-		const setEnrichResult = await backend.set(credentialIdBase64, pendingPayload, enrichExpiresAt)
+		const setEnrichResult = await backend.set(credentialIdBase64, pendingPayload, enrichExpiresAt, ctx)
 		const enrichToken = setEnrichResult && typeof setEnrichResult === "object" && "pendingToken" in setEnrichResult
 			? (setEnrichResult as { pendingToken: string }).pendingToken
 			: undefined
