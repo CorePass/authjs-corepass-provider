@@ -102,9 +102,10 @@ export type CreateCorePassServerOptions = {
 
 	signaturePath?: string
 	allowedAaguids?: string | string[] | false
-	/** COSE algorithm ID(s) for pubKeyCredParams. Single value or array. */
+	/** COSE algorithm ID(s); passed as supportedAlgorithmIDs in SimpleWebAuthn v13. Single value or array. */
 	pubKeyCredAlgs?: number | number[]
-	attestationType?: "none" | "indirect" | "direct"
+	/** WebAuthn attestation. v13: "direct" | "enterprise" | "none"; "indirect" is mapped to "direct". */
+	attestationType?: "none" | "indirect" | "direct" | "enterprise"
 	authenticatorAttachment?: "platform" | "cross-platform"
 	/** v13: Encourage browser to prompt for this authenticator type; sets hints in options. */
 	preferredAuthenticatorType?: "securityKey" | "localDevice" | "remoteDevice"

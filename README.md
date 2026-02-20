@@ -411,9 +411,9 @@ This adds:
 ## Options
 
 - **`allowedAaguids`**: defaults to CorePass AAGUID `636f7265-7061-7373-6964-656e74696679`. Pass a string or an array of AAGUIDs. Set to `false` to allow any authenticator.
-- **`pubKeyCredAlgs`**: COSE algorithm ID(s) for `pubKeyCredParams`. Single value (e.g. `-7`) or array (e.g. `[-7, -8]`). Default: all WebAuthn-relevant signature algorithms. Override to restrict or reorder.
-- **WebAuthn registration options** (optional overrides; defaults are passkey-friendly and privacy-friendly):
-  - **`attestationType`**: `"none"` (default), `"indirect"`, or `"direct"`.
+- **`pubKeyCredAlgs`**: COSE algorithm ID(s); passed as **`supportedAlgorithmIDs`** in SimpleWebAuthn v13. Single value (e.g. `-7`) or array (e.g. `[-7, -8]`). Default: all WebAuthn-relevant signature algorithms. Override to restrict or reorder.
+- **WebAuthn registration options** (optional overrides; defaults are passkey-friendly and privacy-friendly). SimpleWebAuthn **v13** is required.
+  - **`attestationType`**: `"none"` (default), `"indirect"` (mapped to `"direct"` in v13), `"direct"`, or `"enterprise"`.
   - **`authenticatorAttachment`**: `"cross-platform"` (default) or `"platform"`.
   - **`preferredAuthenticatorType`** (v13): Encourage the browser to prompt for a specific type. **`"securityKey"`** (hardware key), **`"localDevice"`** (platform authenticator on this device), **`"remoteDevice"`** (phone/cross-device). When set, the server adds the corresponding **hints** to registration options and the client’s `startRegistration()` uses them.
   - **`residentKey`**: `"preferred"` (default), `"required"`, or `"discouraged"`.
