@@ -102,9 +102,10 @@ export type CreateCorePassServerOptions = {
 
 	signaturePath?: string
 	allowedAaguids?: string | string[] | false
-	/** COSE algorithm ID(s) for pubKeyCredParams. Single value or array. */
+	/** COSE algorithm ID(s); passed as supportedAlgorithmIDs in SimpleWebAuthn v13. Single value or array. */
 	pubKeyCredAlgs?: number | number[]
-	attestationType?: "none" | "indirect" | "direct"
+	/** WebAuthn attestation. v13: "direct" | "enterprise" | "none"; "indirect" is mapped to "direct". */
+	attestationType?: "none" | "indirect" | "direct" | "enterprise"
 	authenticatorAttachment?: "platform" | "cross-platform"
 	/** v13: Encourage browser to prompt for this authenticator type; sets hints in options. */
 	preferredAuthenticatorType?: "securityKey" | "localDevice" | "remoteDevice"
@@ -113,6 +114,30 @@ export type CreateCorePassServerOptions = {
 	transports?: ("usb" | "nfc" | "ble" | "internal" | "hybrid")[]
 	/** Require Android SafetyNet CTS profile match when using SafetyNet attestation. Default true. */
 	attestationSafetyNetEnforceCTSCheck?: boolean
+
+	/**
+	 * Optional WebAuthn client extension inputs for registration (v13 generateRegistrationOptions).
+	 * e.g. { credProps: true } or { largeBlob: { support: "required" } }. Omitted if not set.
+	 */
+	registrationExtensions?: Record<string, unknown>
+
+	/**
+	 * When true, verifyRegistrationResponse fails if the authenticator did not report user presence (v13).
+	 * Optional; not set by default.
+	 */
+	requireUserPresence?: boolean
+
+	/**
+	 * Expected credential type when verifying registration (v13 verifyRegistrationResponse).
+	 * e.g. "public-key" (default) or Secure Payment Confirmation type. Omitted if not set.
+	 */
+	expectedType?: string
+
+	/**
+	 * COSE algorithm IDs to accept when verifying attestation (v13 verifyRegistrationResponse).
+	 * If set, only these algorithms are accepted; if omitted, verification uses default behaviour.
+	 */
+	verifySupportedAlgorithmIDs?: number[]
 
 	emailRequired?: boolean
 	requireO18y?: boolean

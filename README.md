@@ -411,9 +411,9 @@ This adds:
 ## Options
 
 - **`allowedAaguids`**: defaults to CorePass AAGUID `636f7265-7061-7373-6964-656e74696679`. Pass a string or an array of AAGUIDs. Set to `false` to allow any authenticator.
-- **`pubKeyCredAlgs`**: COSE algorithm ID(s) for `pubKeyCredParams`. Single value (e.g. `-7`) or array (e.g. `[-7, -8]`). Default: all WebAuthn-relevant signature algorithms. Override to restrict or reorder.
-- **WebAuthn registration options** (optional overrides; defaults are passkey-friendly and privacy-friendly):
-  - **`attestationType`**: `"none"` (default), `"indirect"`, or `"direct"`.
+- **`pubKeyCredAlgs`**: COSE algorithm ID(s); passed as **`supportedAlgorithmIDs`** in SimpleWebAuthn v13. Single value (e.g. `-7`) or array (e.g. `[-7, -8]`). Default: all WebAuthn-relevant signature algorithms. Override to restrict or reorder.
+- **WebAuthn registration options** (optional overrides; defaults are passkey-friendly and privacy-friendly). SimpleWebAuthn **v13** is required.
+  - **`attestationType`**: `"none"` (default), `"indirect"` (mapped to `"direct"` in v13), `"direct"`, or `"enterprise"`.
   - **`authenticatorAttachment`**: `"cross-platform"` (default) or `"platform"`.
   - **`preferredAuthenticatorType`** (v13): Encourage the browser to prompt for a specific type. **`"securityKey"`** (hardware key), **`"localDevice"`** (platform authenticator on this device), **`"remoteDevice"`** (phone/cross-device). When set, the server adds the corresponding **hints** to registration options and the client’s `startRegistration()` uses them.
   - **`residentKey`**: `"preferred"` (default), `"required"`, or `"discouraged"`.
@@ -426,6 +426,10 @@ This adds:
     - **`ble`**: security key over Bluetooth Low Energy. User pairs/taps a BLE key.
     If omitted, the browser chooses which authenticators to offer; the authenticator may still report its transports in the attestation (stored for later sign-in hints).
 - **`attestationSafetyNetEnforceCTSCheck`**: When **`true`** (default), require that an Android device’s system integrity has not been tampered with if it uses SafetyNet attestation. Set to **`false`** to allow attestation without the CTS profile check. Passed to SimpleWebAuthn’s `verifyRegistrationResponse`. v13 improves attestation verification (e.g. intermediate certificates as trust anchors) internally; this option only controls the SafetyNet CTS check.
+- **`registrationExtensions`** (v13, optional): WebAuthn client extension inputs for registration (e.g. `{ credProps: true }` or `{ largeBlob: { support: "required" } }`). Passed as **`extensions`** to `generateRegistrationOptions`. Omitted if not set.
+- **`requireUserPresence`** (v13, optional): When **`true`**, `verifyRegistrationResponse` fails if the authenticator did not report user presence. Not set by default.
+- **`expectedType`** (v13, optional): Expected credential type when verifying registration (e.g. `"public-key"` or a Secure Payment Confirmation type). Omitted if not set.
+- **`verifySupportedAlgorithmIDs`** (v13, optional): COSE algorithm IDs to accept when verifying attestation. If set, only these algorithms are accepted; if omitted, verification uses default behaviour.
 - **`secret`**: **required**. Used to encrypt/sign the pending cookie (when pending strategy is **cookie**) and for VerificationToken-based pending (when using Auth.js VT adapter fallback).
 - **`pending`**: pending state strategy. **`{ strategy: "db" }`** (default): use adapter `setPending`/`consumePending` if present, else Auth.js VerificationToken methods (client must send `pendingToken` from start to finish/enrich). **`{ strategy: "cookie", cookieName?, maxAgeSeconds? }`**: store pending in an encrypted cookie (default TTL 120s). When **finalize** is **immediate**, pending is forced to **cookie**.
 - **`finalize`**: **`{ strategy: "after" }`** (default): registration is finalized only after enrich (`POST /passkey/data` with Ed448 signature). **`{ strategy: "immediate", maxAgeSeconds? }`**: `finishRegistration` can finalize in one roundtrip when `coreId` is provided; forces **pending** to **cookie**; `HEAD /passkey/data` returns **404**.
