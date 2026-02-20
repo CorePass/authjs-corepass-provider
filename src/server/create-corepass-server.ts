@@ -471,6 +471,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			timeout: time.registrationTimeoutMs,
 			excludeCredentials: [],
 			...(preferredAuthenticatorType && { preferredAuthenticatorType }),
+			...(options.registrationExtensions && Object.keys(options.registrationExtensions).length > 0 && { extensions: options.registrationExtensions }),
 		})
 
 		const responseBody: Record<string, unknown> = { options: creationOptions }
@@ -580,6 +581,9 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 				expectedRPID,
 				requireUserVerification,
 				attestationSafetyNetEnforceCTSCheck,
+				...(options.requireUserPresence !== undefined && { requireUserPresence: options.requireUserPresence }),
+				...(typeof options.expectedType === "string" && options.expectedType && { expectedType: options.expectedType }),
+				...(options.verifySupportedAlgorithmIDs && options.verifySupportedAlgorithmIDs.length > 0 && { supportedAlgorithmIDs: options.verifySupportedAlgorithmIDs }),
 			})
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err)
