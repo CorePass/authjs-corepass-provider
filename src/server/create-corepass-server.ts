@@ -12,11 +12,12 @@ import { parseEd448PublicKey, parseEd448Signature, verifyEd448Signature } from "
 import { extractAaguidFromAttestationObject, validateAaguidAllowlist } from "./aaguid.js"
 
 import { resolvePasskeyUserId } from "../utils/userId.js"
+import type { CorePassUserIdentity } from "../types.js"
 import type {
 	CorePassFinalizeArgs,
 	CorePassFinalizeResult,
-	CorePassStartPayload,
 	CorePassPendingRegPayload,
+	CorePassStartPayload,
 	CreateCorePassServerOptions,
 } from "./types.js"
 
@@ -652,7 +653,15 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 				dataExpMinutes: parseDataExpMinutes(body?.dataExp),
 			})
 
-			const storedIdentity = await adapter.getIdentityByCoreId({ coreId: coreIdFromBody })
+			let storedIdentity: CorePassUserIdentity | null = null
+			try {
+				storedIdentity = await adapter.getIdentityByCoreId({ coreId: coreIdFromBody })
+			} catch (err) {
+				return withPendingCookieHeaders(
+					json(500, { ok: false, error: "Failed to retrieve identity after registration" }),
+					cookieHeaders
+				)
+			}
 			await maybePostRegistrationWebhook({
 				coreId: coreIdFromBody,
 				refId: enableRefId ? storedIdentity?.refId ?? null : null,
