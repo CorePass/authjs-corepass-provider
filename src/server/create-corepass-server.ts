@@ -465,7 +465,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			userName: options.defaultUserName ?? email ?? "CorePass",
 			userDisplayName: options.defaultUserDisplayName ?? email ?? "CorePass User",
 			challenge: new Uint8Array(challengeBytes),
-			pubKeyCredParams: pubKeyCredAlgs.map((alg) => ({ alg, type: "public-key" })),
+			supportedAlgorithmIDs: pubKeyCredAlgs,
 			authenticatorSelection,
 			attestationType,
 			timeout: time.registrationTimeoutMs,
