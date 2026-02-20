@@ -436,7 +436,10 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		const setResult = await backend.set(pendingKey, payload, expiresAt, ctx)
 		const pendingToken = setResult && typeof setResult === "object" && "pendingToken" in setResult ? (setResult as { pendingToken: string }).pendingToken : undefined
 
-		const attestationType = options.attestationType ?? "none"
+		// SimpleWebAuthn v13: attestationType is "direct" | "enterprise" | "none" (no "indirect")
+		const rawAttestation = options.attestationType ?? "none"
+		const attestationType =
+			rawAttestation === "indirect" ? "direct" : (rawAttestation as "direct" | "enterprise" | "none")
 		const authenticatorAttachment = options.authenticatorAttachment ?? "cross-platform"
 		const preferredAuthenticatorType = options.preferredAuthenticatorType
 		const residentKey = options.residentKey ?? "preferred"
@@ -458,10 +461,10 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		const creationOptions = await sw.generateRegistrationOptions({
 			rpID: options.rpID,
 			rpName: options.rpName,
-			userID: userIdResolution.userIdBytes,
+			userID: new Uint8Array(userIdResolution.userIdBytes),
 			userName: options.defaultUserName ?? email ?? "CorePass",
 			userDisplayName: options.defaultUserDisplayName ?? email ?? "CorePass User",
-			challenge: challengeBytes,
+			challenge: new Uint8Array(challengeBytes),
 			pubKeyCredParams: pubKeyCredAlgs.map((alg) => ({ alg, type: "public-key" })),
 			authenticatorSelection,
 			attestationType,
@@ -571,7 +574,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 		let verification: Awaited<ReturnType<(typeof sw)["verifyRegistrationResponse"]>>
 		try {
 			verification = await sw.verifyRegistrationResponse({
-				response: attestation,
+				response: attestation as Parameters<typeof sw.verifyRegistrationResponse>[0]["response"],
 				expectedChallenge,
 				expectedOrigin,
 				expectedRPID,
