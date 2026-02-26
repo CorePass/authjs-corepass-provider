@@ -47,13 +47,13 @@
     },
     "overrides": {
         "@simplewebauthn/browser": "^13.2.2",
-        "@simplewebauthn/server": "^13.2.2"
+        "@simplewebauthn/server": "^13.2.3"
     },
     "devDependencies": {
 		"@auth/core": ">=0.34.3",
 		"@simplewebauthn/browser": "^13.2.2",
-		"@simplewebauthn/server": "^13.2.2",
-		"@types/node": "^25.3.0",
+		"@simplewebauthn/server": "^13.2.3",
+		"@types/node": "^25.3.1",
 		"tsup": "^8.5.1",
 		"typescript": "^5.9.3"
 	}
