@@ -51,11 +51,13 @@ export type CorePassStore = {
 	upsertProfile(profile: CorePassProfile): Promise<void>
 }
 
-/** Payload stored at start and consumed at finish (challenge + optional email/refId). */
+/** Payload stored at start and consumed at finish (challenge + optional email/refId/coreId). */
 export type CorePassStartPayload = {
 	challenge: string
 	email: string | null
 	refId: string | null
+	/** Set when user entered a valid Core ID in the email/identity field (allowCoreIdInput). Omitted in older payloads. */
+	coreId?: string | null
 }
 
 /** Payload stored after finish for enrich (credential + metadata). */
@@ -68,6 +70,7 @@ export type CorePassPendingRegPayload = {
 	transports: string | null
 	email: string | null
 	refId: string | null
+	coreId?: string | null
 	aaguid: string | null
 	createdAt: number
 	expiresAt: number
@@ -174,6 +177,12 @@ export type CreateCorePassServerOptions = {
 	 * - 'auto': detect by regex (cb|ce|ab)+2-digit+40hex; cb→mainnet, ab→testnet, ce→enterprise.
 	 */
 	validateCoreID?: boolean | "auto"
+
+	/**
+	 * When true (default), a single input (e.g. email field) may be accepted as Core ID if it is not a valid email
+	 * but passes Core ID validation. If valid email, store as email; if invalid email and valid Core ID, store as coreId.
+	 */
+	allowCoreIdInput?: boolean
 }
 
 export type CorePassFinalizeArgs = {

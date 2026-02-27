@@ -75,6 +75,29 @@ function parseEmail(input: unknown): string | null {
 	return email
 }
 
+/**
+ * Parse a single input as email or (when allowCoreIdInput) as Core ID.
+ * If valid email, return { email, coreId: null }. If invalid email and valid Core ID, return { email: null, coreId }.
+ * Otherwise return { email: null, coreId: null }.
+ */
+function parseEmailOrCoreId(
+	input: unknown,
+	allowCoreIdInput: boolean,
+	validateCoreID: boolean | "auto"
+): { email: string | null; coreId: string | null } {
+	if (input === undefined || input === null || typeof input !== "string") {
+		return { email: null, coreId: null }
+	}
+	const raw = input.trim()
+	if (!raw) return { email: null, coreId: null }
+	const asEmail = parseEmail(raw)
+	if (asEmail) return { email: asEmail, coreId: null }
+	if (allowCoreIdInput && validateCoreIdWithSettings(raw, validateCoreID)) {
+		return { email: null, coreId: raw }
+	}
+	return { email: null, coreId: null }
+}
+
 function parseBool(input: unknown): boolean | null {
 	if (input === undefined || input === null) return null
 	if (typeof input === "boolean") return input
@@ -116,23 +139,31 @@ async function finalizeToAuthJs(
 	const enableRefId = options.enableRefId ?? false
 
 	return runInTx(async (ctx) => {
+		const providerAccountId = args.credentialId
 		let identity = await adapter.getIdentityByCoreId({ coreId: args.coreId }, ctx)
 		let user: AdapterUser | null = identity ? await adapter.getUser!(identity.userId) : null
+
+		// Credential may have been stored at finish (e.g. immediate without coreId); reuse that user when enriching.
+		if (!user && adapter.getUserByAccount) {
+			user = await adapter.getUserByAccount({ provider: providerId, providerAccountId })
+		}
 
 		if (!identity || !user) {
 			const emailRequired = options.emailRequired ?? false
 			if (emailRequired && !args.email) throw new Error("Missing email")
 
-			user = await adapter.createUser!({
-				email: args.email ?? undefined,
-				emailVerified: null,
-				name: args.coreId.toUpperCase(),
-				image: null,
-			} as Parameters<NonNullable<typeof adapter.createUser>>[0])
+			if (!user) {
+				user = await adapter.createUser!({
+					email: args.email ?? undefined,
+					emailVerified: null,
+					name: args.coreId.toUpperCase(),
+					image: null,
+				} as Parameters<NonNullable<typeof adapter.createUser>>[0])
+			}
 
 			const refId = enableRefId ? args.refId ?? crypto.randomUUID() : null
-			identity = { coreId: args.coreId, userId: user.id, refId }
-			await adapter.upsertIdentity({ coreId: args.coreId, userId: user.id, refId }, ctx)
+			identity = { coreId: args.coreId, userId: user!.id, refId }
+			await adapter.upsertIdentity({ coreId: args.coreId, userId: user!.id, refId }, ctx)
 		} else {
 			if (enableRefId && args.refId && !identity.refId) {
 				await adapter.upsertIdentity({ ...identity, refId: args.refId }, ctx)
@@ -145,7 +176,6 @@ async function finalizeToAuthJs(
 			user = await adapter.updateUser({ id: user!.id, email: args.email } as Parameters<NonNullable<typeof adapter.updateUser>>[0])
 		}
 
-		const providerAccountId = args.credentialId
 		const existingUserByAccount = await adapter.getUserByAccount!({
 			provider: providerId,
 			providerAccountId,
@@ -249,6 +279,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 				? pubKeyCredAlgsRaw
 				: DEFAULT_PUBKEY_CRED_ALGS
 	const validateCoreID = options.validateCoreID ?? "auto"
+	const allowCoreIdInput = options.allowCoreIdInput ?? true
 
 	const sw = WebAuthn({}).simpleWebAuthn
 
@@ -397,12 +428,23 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 
 	async function startRegistration(req: Request): Promise<Response> {
 		const body = (await req.json().catch(() => null)) as Record<string, unknown>
-		const email = parseEmail(body?.email)
 		const refId =
 			enableRefId && typeof body?.refId === "string" ? body.refId.trim() || null : null
 
-		if (body?.email !== undefined && body?.email !== null && !email) {
-			return json(400, { ok: false, error: "Invalid email" })
+		let email: string | null = null
+		let coreId: string | null = null
+		if (body?.email !== undefined && body?.email !== null) {
+			const parsed = parseEmailOrCoreId(body.email, allowCoreIdInput, validateCoreID)
+			email = parsed.email
+			coreId = parsed.coreId
+			if (!email && !coreId) {
+				return json(400, {
+					ok: false,
+					error: allowCoreIdInput
+						? "Invalid email or Core ID"
+						: "Invalid email",
+				})
+			}
 		}
 
 		const userIdInput =
@@ -417,7 +459,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 
 		const challengeBytes = randomBytes(32)
 		const challenge = bytesToBase64Url(challengeBytes)
-		const payload: CorePassStartPayload = { challenge, email, refId }
+		const payload: CorePassStartPayload = { challenge, email, refId, coreId }
 		const expiresAt = new Date(Date.now() + time.flowExpiresInMs)
 		const useCookie = resolved.pending.strategy === "cookie"
 		const pendingKey = useCookie ? "reg" : bytesToBase64Url(randomBytes(16))
@@ -624,50 +666,34 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			transports,
 		}
 
-		const coreIdFromBody = typeof body?.coreId === "string" ? body.coreId.trim() : null
-
-		if (finalizeImmediate && coreIdFromBody) {
-			if (!validateCoreIdWithSettings(coreIdFromBody, validateCoreID)) {
-				return withPendingCookieHeaders(json(400, { ok: false, error: "Invalid Core ID" }), cookieHeaders)
+		// With immediate finish we never receive coreId, o18y, o21y, kyc, kycDoc, dataExpMinutes at finalization;
+		// those are strictly from the enrichment process. So at finish we only store the credential so login works.
+		if (finalizeImmediate && adapter.createUser && adapter.linkAccount && adapter.createAuthenticator) {
+			const existingAuth = await adapter.getAuthenticator?.(credentialIdBase64)
+			if (!existingAuth) {
+				await runInTx(async () => {
+					const user = await adapter.createUser!({
+						email: saved.email ?? undefined,
+						emailVerified: null,
+						name: "Pending",
+						image: null,
+					} as Parameters<NonNullable<typeof adapter.createUser>>[0])
+					const passkeyProviderId = options.providerId ?? "corepass"
+					const account: AdapterAccount = {
+						userId: user.id,
+						provider: passkeyProviderId,
+						providerAccountId: credentialIdBase64,
+						type: "webauthn",
+					}
+					if (adapter.linkAccount) await adapter.linkAccount(account)
+					if (adapter.createAuthenticator) {
+						await adapter.createAuthenticator({
+							...authenticator,
+							userId: user.id,
+						} as AdapterAuthenticator)
+					}
+				})
 			}
-
-			const emailFromBody = parseEmail(body?.email)
-			if (body?.email !== undefined && body?.email !== null && !emailFromBody) {
-				return withPendingCookieHeaders(json(400, { ok: false, error: "Invalid email" }), cookieHeaders)
-			}
-			const finalEmail = emailFromBody || saved.email || null
-			if (emailRequired && !finalEmail) {
-				return withPendingCookieHeaders(json(400, { ok: false, error: "Missing email" }), cookieHeaders)
-			}
-
-			const result = await finalizeToAuthJs(adapter, runInTx, options, {
-				coreId: coreIdFromBody,
-				credentialId: credentialIdBase64,
-				authenticator,
-				email: finalEmail,
-				refId: enableRefId ? saved.refId ?? null : null,
-				o18y: parseBool(body?.o18y),
-				o21y: parseBool(body?.o21y),
-				kyc: parseBool(body?.kyc),
-				kycDoc: typeof body?.kycDoc === "string" ? body.kycDoc.trim() || null : null,
-				dataExpMinutes: parseDataExpMinutes(body?.dataExp),
-			})
-
-			let storedIdentity: CorePassUserIdentity | null = null
-			try {
-				storedIdentity = await adapter.getIdentityByCoreId({ coreId: coreIdFromBody })
-			} catch (err) {
-				return withPendingCookieHeaders(
-					json(500, { ok: false, error: "Failed to retrieve identity after registration" }),
-					cookieHeaders
-				)
-			}
-			await maybePostRegistrationWebhook({
-				coreId: coreIdFromBody,
-				refId: enableRefId ? storedIdentity?.refId ?? null : null,
-			})
-
-			return withPendingCookieHeaders(json(200, { ok: true, finalized: true, userId: result.userId, coreId: coreIdFromBody }), cookieHeaders)
 		}
 
 		// After strategy: store pending for enrich
@@ -682,6 +708,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			transports: authenticator.transports ?? null,
 			email: saved.email,
 			refId: enableRefId ? saved.refId ?? null : null,
+			coreId: saved.coreId ?? null,
 			aaguid,
 			createdAt,
 			expiresAt: expiresAtSec,
