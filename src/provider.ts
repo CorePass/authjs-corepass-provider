@@ -9,11 +9,14 @@ import WebAuthn, {
  * This provider is a thin wrapper around Auth.js' built-in WebAuthn provider with
  * Passkey-friendly defaults. CorePass' pending-registration + enrichment flow is
  * implemented via the server helpers exported from this package (see `createCorePassServer`).
+ *
+ * SimpleWebAuthn v13 expects the option key `credential` in verifyAuthenticationResponse;
+ * Auth.js passes `authenticator`. We wrap verifyAuthenticationResponse so both work.
  */
 export default function CorePass(
 	config: Partial<WebAuthnConfig> = {}
 ): WebAuthnConfig {
-	return WebAuthn({
+	const base = WebAuthn({
 		id: "corepass",
 		name: "CorePass",
 		authenticationOptions: {
@@ -35,4 +38,17 @@ export default function CorePass(
 		},
 		...config,
 	})
+	const sw = base.simpleWebAuthn
+	if (sw && typeof sw.verifyAuthenticationResponse === "function") {
+		const original = sw.verifyAuthenticationResponse
+		base.simpleWebAuthn = {
+			...sw,
+			verifyAuthenticationResponse: (opts: Parameters<typeof original>[0] & { authenticator?: unknown }) =>
+				original({
+					...opts,
+					credential: (opts.credential ?? opts.authenticator) as Parameters<typeof original>[0]["credential"],
+				}),
+		}
+	}
+	return base
 }
