@@ -5,8 +5,8 @@ CorePass provider and server helpers for [Auth.js](https://authjs.dev/) (`@auth/
 **Flow in short:**
 
 - CorePass first checks **`HEAD /passkey/data`**: **200** = enrichment available (finalize strategy **after**), **404** = enrichment not available (finalize strategy **immediate**).
-- **If enrichment available (200):** browser does WebAuthn via `POST /webauthn/start` and `POST /webauthn/finish` → server stores pending state (db or cookie) → CorePass app finalizes by calling **`POST /passkey/data`** with an **Ed448-signed** payload.
-- **If enrichment not available (404):** browser completes attestation and finalizes in one go via `POST /webauthn/finish` with `coreId` (and optional data); no enrich step (finalize strategy **immediate**).
+- **If enrichment available (200):** browser does WebAuthn via `POST /webauthn/start` and `POST /webauthn/finish` → server stores pending state (db or cookie) → CorePass app finalizes by calling **`POST /passkey/data`** with an **Ed448-signed** payload (`coreId`, credentialId, timestamp, userData).
+- **If enrichment not available (404):** browser completes attestation via `POST /webauthn/finish`; the server stores the credential (user + account + authenticator) so login works immediately. **coreId, o18y, o21y, kyc, kycDoc, dataExp** are never sent at finalization—they are **enrichment-only**. Optional enrich can still be called later with `POST /passkey/data` to attach identity and profile.
 
 ## What you get
 
@@ -35,6 +35,7 @@ sequenceDiagram
   Note over A: If 200, use enrich flow below
 
   B->>S: POST /webauthn/start { email? }
+  Note over B,S: email?: valid email → stored as email; if allowCoreIdInput (default true), invalid email but valid Core ID → stored as coreId
   Note over B,S: Pending: adapter setPending/consumePending or cookie (no separate challenge store)
   S->>Adapter: setPending(pendingKey, …)
   S-->>B: 200 { options: CreationOptions, pendingKey?, pendingToken? } + Set-Cookie (if cookie strategy)
@@ -43,6 +44,7 @@ sequenceDiagram
   S->>Adapter: consumePending(pendingKey) / consumeWithToken(…)
   S->>S: verifyRegistrationResponse()
   S->>Adapter: setPending(credentialId, pendingRegPayload)
+  Note over S: If finalize immediate: also create user+account+authenticator so login works before enrich
   S-->>B: 200 { pending:true, credentialId, enrichToken? }
 
   A->>S: POST /passkey/data {coreId, credentialId, timestamp, userData} + X-Signature (Ed448)
@@ -225,10 +227,10 @@ Each adapter implements `setPending`/`consumePending` so **pending.strategy "db"
 
 ### Start / finish response shape
 
-- **Start** (body): optional **`userId`** — string encoding of a 32- or 64-byte value (base64 or base64url; padding optional). Used as the WebAuthn user handle. Resolution order: request body **userId** → server option **defaultUserId** (set in `createCorePassServer`) → if neither is set, the server falls back to **32 random bytes**. Canonical form is base64url with padding (44 chars for 32 bytes, 88 for 64). Invalid input (wrong length, bad chars, or weak/trivial patterns) causes **400**.
+- **Start** (body): optional **`email`** — if present, parsed as **email or Core ID** when **`allowCoreIdInput`** is true (default): valid email → stored as email in pending; invalid email but valid Core ID → stored as coreId in pending. Optional **`userId`** — string encoding of a 32- or 64-byte value (base64 or base64url; padding optional). Used as the WebAuthn user handle. Resolution order: request body **userId** → server option **defaultUserId** (set in `createCorePassServer`) → if neither is set, the server falls back to **32 random bytes**. Canonical form is base64url with padding (44 chars for 32 bytes, 88 for 64). Invalid input (wrong length, bad chars, or weak/trivial patterns) causes **400**.
 - **Start** returns `{ options: CreationOptions, pendingKey?, pendingToken? }`. Use `options` for `navigator.credentials.create(options)`. When pending strategy is **db** (and not cookie), send **pendingKey** (and **pendingToken** if present) in the **finish** request body. When pending is **cookie**, the server sets a cookie and you do not need to send pendingKey.
-- **Finish** (body): `{ attestation, pendingKey?, pendingToken?, coreId?, email?, ... }`. For **immediate** finalize, include **coreId** (and optional email/data). For **after** strategy, include **pendingKey** (and **pendingToken** if the backend requires it).
-- **Enrich** (`POST /passkey/data`): when the pending backend requires a token (VerificationToken fallback), include **enrichToken** in the body (returned from finish as `enrichToken`).
+- **Finish** (body): `{ attestation, pendingKey?, pendingToken?, email? }`. **coreId, o18y, o21y, kyc, kycDoc, dataExp** are **not** accepted at finalization—they are enrichment-only. For **immediate** finalize the server stores the credential (user + account + authenticator) so login works; no coreId in body. For **after** strategy, include **pendingKey** (and **pendingToken** if the backend requires it).
+- **Enrich** (`POST /passkey/data`): **coreId** must come from the request **body** only (required). It is not taken from the start input or from pending. When the pending backend requires a token (VerificationToken fallback), include **enrichToken** in the body (returned from finish as `enrichToken`).
 
 ### Troubleshooting: 400 "Invalid registration response" on `POST /webauthn/finish`
 
@@ -432,13 +434,14 @@ This adds:
 - **`verifySupportedAlgorithmIDs`** (v13, optional): COSE algorithm IDs to accept when verifying attestation. If set, only these algorithms are accepted; if omitted, verification uses default behaviour.
 - **`secret`**: **required**. Used to encrypt/sign the pending cookie (when pending strategy is **cookie**) and for VerificationToken-based pending (when using Auth.js VT adapter fallback).
 - **`pending`**: pending state strategy. **`{ strategy: "db" }`** (default): use adapter `setPending`/`consumePending` if present, else Auth.js VerificationToken methods (client must send `pendingToken` from start to finish/enrich). **`{ strategy: "cookie", cookieName?, maxAgeSeconds? }`**: store pending in an encrypted cookie (default TTL 120s). When **finalize** is **immediate**, pending is forced to **cookie**.
-- **`finalize`**: **`{ strategy: "after" }`** (default): registration is finalized only after enrich (`POST /passkey/data` with Ed448 signature). **`{ strategy: "immediate", maxAgeSeconds? }`**: `finishRegistration` can finalize in one roundtrip when `coreId` is provided; forces **pending** to **cookie**; `HEAD /passkey/data` returns **404**.
+- **`finalize`**: **`{ strategy: "after" }`** (default): registration is finalized only after enrich (`POST /passkey/data` with Ed448 signature). **`{ strategy: "immediate", maxAgeSeconds? }`**: at finish the server stores the credential (user + account + authenticator) so login works immediately; **coreId, o18y, o21y, kyc, kycDoc, dataExp** are never sent at finalization (enrichment-only). `HEAD /passkey/data` returns **404**.
+- **`allowCoreIdInput`**: defaults to **`true`**. When true, the single input at **start** (e.g. `body.email`) may be accepted as **Core ID** if it is not a valid email but passes Core ID validation. If valid email → stored as email; if invalid email and valid Core ID → stored as coreId in pending. Applies only to start (and immediate finish flow); **enrich** always requires **coreId** from the request body only.
 - **`emailRequired`**: defaults to `false` (email can arrive later via `/passkey/data`). If no email is provided, the user is created with email undefined; when a real email is provided later it is updated.
 - **`requireO18y`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.o18y=true` or finalization is rejected. Not enforced for immediate-finalize.
 - **`requireO21y`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.o21y=true` or finalization is rejected. Not enforced for immediate-finalize.
 - **`requireKyc`**: defaults to `false`. If enabled, `/passkey/data` must include `userData.kyc=true` or finalization is rejected. Not enforced for immediate-finalize.
 - **`enableRefId`**: defaults to `false`. When enabled, the server generates and stores a `refId` (UUIDv4) for the CoreID identity and can include it in webhooks. When disabled, no `refId` is generated or stored.
-- **`validateCoreID`**: Core ID validation mode. **`'auto'`** (default): detect by regex `^(cb|ce|ab)[0-9]{2}[a-f0-9]{40}$/i` — **cb** → mainnet, **ab** → testnet (Devin), **ce** → enterprise (Koliba); then validate via [blockchain-wallet-validator](https://github.com/sergical/blockchain-wallet-validator). **`true`**: same as `'auto'`. **`false`**: skip validation (accept any string). Used on finish (immediate finalize with `coreId`) and on enrich (`POST /passkey/data`).
+- **`validateCoreID`**: Core ID validation mode. **`'auto'`** (default): detect by regex `^(cb|ce|ab)[0-9]{2}[a-f0-9]{40}$/i` — **cb** → mainnet, **ab** → testnet (Devin), **ce** → enterprise (Koliba); then validate. **`true`**: same as `'auto'`. **`false`**: skip validation (accept any string). Used at start (when input is parsed as Core ID) and on enrich (`POST /passkey/data`).
 - **Registration webhook options**:
   - **`postRegistrationWebhooks`**: defaults to `false`.
   - **`registrationWebhookUrl`**: required if `postRegistrationWebhooks: true`.
@@ -463,7 +466,7 @@ This adds:
 
 The CorePass app sends:
 
-- **Body**: `{ coreId, credentialId, timestamp, userData }`
+- **Body**: `{ coreId, credentialId, timestamp, userData }` — **coreId** is required and must come from the request body only (not from the start input or from pending).
 - **Header**: `X-Signature` (Ed448 signature)
 - **Header** (optional): `X-Public-Key` — raw Ed448 public key (57 bytes) as 114 hex chars or base64. If provided, it is used for signature verification instead of deriving the key from `coreId`. Use this with short-form (44-char) Core ID.
 

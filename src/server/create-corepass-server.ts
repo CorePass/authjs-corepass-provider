@@ -75,6 +75,29 @@ function parseEmail(input: unknown): string | null {
 	return email
 }
 
+/**
+ * Parse a single input as email or (when allowCoreIdInput) as Core ID.
+ * If valid email, return { email, coreId: null }. If invalid email and valid Core ID, return { email: null, coreId }.
+ * Otherwise return { email: null, coreId: null }.
+ */
+function parseEmailOrCoreId(
+	input: unknown,
+	allowCoreIdInput: boolean,
+	validateCoreID: boolean | "auto"
+): { email: string | null; coreId: string | null } {
+	if (input === undefined || input === null || typeof input !== "string") {
+		return { email: null, coreId: null }
+	}
+	const raw = input.trim()
+	if (!raw) return { email: null, coreId: null }
+	const asEmail = parseEmail(raw)
+	if (asEmail) return { email: asEmail, coreId: null }
+	if (allowCoreIdInput && validateCoreIdWithSettings(raw, validateCoreID)) {
+		return { email: null, coreId: raw }
+	}
+	return { email: null, coreId: null }
+}
+
 function parseBool(input: unknown): boolean | null {
 	if (input === undefined || input === null) return null
 	if (typeof input === "boolean") return input
@@ -256,6 +279,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 				? pubKeyCredAlgsRaw
 				: DEFAULT_PUBKEY_CRED_ALGS
 	const validateCoreID = options.validateCoreID ?? "auto"
+	const allowCoreIdInput = options.allowCoreIdInput ?? true
 
 	const sw = WebAuthn({}).simpleWebAuthn
 
@@ -404,12 +428,23 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 
 	async function startRegistration(req: Request): Promise<Response> {
 		const body = (await req.json().catch(() => null)) as Record<string, unknown>
-		const email = parseEmail(body?.email)
 		const refId =
 			enableRefId && typeof body?.refId === "string" ? body.refId.trim() || null : null
 
-		if (body?.email !== undefined && body?.email !== null && !email) {
-			return json(400, { ok: false, error: "Invalid email" })
+		let email: string | null = null
+		let coreId: string | null = null
+		if (body?.email !== undefined && body?.email !== null) {
+			const parsed = parseEmailOrCoreId(body.email, allowCoreIdInput, validateCoreID)
+			email = parsed.email
+			coreId = parsed.coreId
+			if (!email && !coreId) {
+				return json(400, {
+					ok: false,
+					error: allowCoreIdInput
+						? "Invalid email or Core ID"
+						: "Invalid email",
+				})
+			}
 		}
 
 		const userIdInput =
@@ -424,7 +459,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 
 		const challengeBytes = randomBytes(32)
 		const challenge = bytesToBase64Url(challengeBytes)
-		const payload: CorePassStartPayload = { challenge, email, refId }
+		const payload: CorePassStartPayload = { challenge, email, refId, coreId }
 		const expiresAt = new Date(Date.now() + time.flowExpiresInMs)
 		const useCookie = resolved.pending.strategy === "cookie"
 		const pendingKey = useCookie ? "reg" : bytesToBase64Url(randomBytes(16))
@@ -673,6 +708,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			transports: authenticator.transports ?? null,
 			email: saved.email,
 			refId: enableRefId ? saved.refId ?? null : null,
+			coreId: saved.coreId ?? null,
 			aaguid,
 			createdAt,
 			expiresAt: expiresAtSec,
