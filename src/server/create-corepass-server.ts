@@ -116,23 +116,31 @@ async function finalizeToAuthJs(
 	const enableRefId = options.enableRefId ?? false
 
 	return runInTx(async (ctx) => {
+		const providerAccountId = args.credentialId
 		let identity = await adapter.getIdentityByCoreId({ coreId: args.coreId }, ctx)
 		let user: AdapterUser | null = identity ? await adapter.getUser!(identity.userId) : null
+
+		// Credential may have been stored at finish (e.g. immediate without coreId); reuse that user when enriching.
+		if (!user && adapter.getUserByAccount) {
+			user = await adapter.getUserByAccount({ provider: providerId, providerAccountId })
+		}
 
 		if (!identity || !user) {
 			const emailRequired = options.emailRequired ?? false
 			if (emailRequired && !args.email) throw new Error("Missing email")
 
-			user = await adapter.createUser!({
-				email: args.email ?? undefined,
-				emailVerified: null,
-				name: args.coreId.toUpperCase(),
-				image: null,
-			} as Parameters<NonNullable<typeof adapter.createUser>>[0])
+			if (!user) {
+				user = await adapter.createUser!({
+					email: args.email ?? undefined,
+					emailVerified: null,
+					name: args.coreId.toUpperCase(),
+					image: null,
+				} as Parameters<NonNullable<typeof adapter.createUser>>[0])
+			}
 
 			const refId = enableRefId ? args.refId ?? crypto.randomUUID() : null
-			identity = { coreId: args.coreId, userId: user.id, refId }
-			await adapter.upsertIdentity({ coreId: args.coreId, userId: user.id, refId }, ctx)
+			identity = { coreId: args.coreId, userId: user!.id, refId }
+			await adapter.upsertIdentity({ coreId: args.coreId, userId: user!.id, refId }, ctx)
 		} else {
 			if (enableRefId && args.refId && !identity.refId) {
 				await adapter.upsertIdentity({ ...identity, refId: args.refId }, ctx)
@@ -145,7 +153,6 @@ async function finalizeToAuthJs(
 			user = await adapter.updateUser({ id: user!.id, email: args.email } as Parameters<NonNullable<typeof adapter.updateUser>>[0])
 		}
 
-		const providerAccountId = args.credentialId
 		const existingUserByAccount = await adapter.getUserByAccount!({
 			provider: providerId,
 			providerAccountId,
@@ -624,50 +631,34 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 			transports,
 		}
 
-		const coreIdFromBody = typeof body?.coreId === "string" ? body.coreId.trim() : null
-
-		if (finalizeImmediate && coreIdFromBody) {
-			if (!validateCoreIdWithSettings(coreIdFromBody, validateCoreID)) {
-				return withPendingCookieHeaders(json(400, { ok: false, error: "Invalid Core ID" }), cookieHeaders)
+		// With immediate finish we never receive coreId, o18y, o21y, kyc, kycDoc, dataExpMinutes at finalization;
+		// those are strictly from the enrichment process. So at finish we only store the credential so login works.
+		if (finalizeImmediate && adapter.createUser && adapter.linkAccount && adapter.createAuthenticator) {
+			const existingAuth = await adapter.getAuthenticator?.(credentialIdBase64)
+			if (!existingAuth) {
+				await runInTx(async () => {
+					const user = await adapter.createUser!({
+						email: saved.email ?? undefined,
+						emailVerified: null,
+						name: "Pending",
+						image: null,
+					} as Parameters<NonNullable<typeof adapter.createUser>>[0])
+					const passkeyProviderId = options.providerId ?? "corepass"
+					const account: AdapterAccount = {
+						userId: user.id,
+						provider: passkeyProviderId,
+						providerAccountId: credentialIdBase64,
+						type: "webauthn",
+					}
+					if (adapter.linkAccount) await adapter.linkAccount(account)
+					if (adapter.createAuthenticator) {
+						await adapter.createAuthenticator({
+							...authenticator,
+							userId: user.id,
+						} as AdapterAuthenticator)
+					}
+				})
 			}
-
-			const emailFromBody = parseEmail(body?.email)
-			if (body?.email !== undefined && body?.email !== null && !emailFromBody) {
-				return withPendingCookieHeaders(json(400, { ok: false, error: "Invalid email" }), cookieHeaders)
-			}
-			const finalEmail = emailFromBody || saved.email || null
-			if (emailRequired && !finalEmail) {
-				return withPendingCookieHeaders(json(400, { ok: false, error: "Missing email" }), cookieHeaders)
-			}
-
-			const result = await finalizeToAuthJs(adapter, runInTx, options, {
-				coreId: coreIdFromBody,
-				credentialId: credentialIdBase64,
-				authenticator,
-				email: finalEmail,
-				refId: enableRefId ? saved.refId ?? null : null,
-				o18y: parseBool(body?.o18y),
-				o21y: parseBool(body?.o21y),
-				kyc: parseBool(body?.kyc),
-				kycDoc: typeof body?.kycDoc === "string" ? body.kycDoc.trim() || null : null,
-				dataExpMinutes: parseDataExpMinutes(body?.dataExp),
-			})
-
-			let storedIdentity: CorePassUserIdentity | null = null
-			try {
-				storedIdentity = await adapter.getIdentityByCoreId({ coreId: coreIdFromBody })
-			} catch (err) {
-				return withPendingCookieHeaders(
-					json(500, { ok: false, error: "Failed to retrieve identity after registration" }),
-					cookieHeaders
-				)
-			}
-			await maybePostRegistrationWebhook({
-				coreId: coreIdFromBody,
-				refId: enableRefId ? storedIdentity?.refId ?? null : null,
-			})
-
-			return withPendingCookieHeaders(json(200, { ok: true, finalized: true, userId: result.userId, coreId: coreIdFromBody }), cookieHeaders)
 		}
 
 		// After strategy: store pending for enrich
