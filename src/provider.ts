@@ -43,11 +43,15 @@ export default function CorePass(
 		const original = sw.verifyAuthenticationResponse
 		base.simpleWebAuthn = {
 			...sw,
-			verifyAuthenticationResponse: (opts: Parameters<typeof original>[0] & { authenticator?: unknown }) =>
-				original({
-					...opts,
-					credential: (opts.credential ?? opts.authenticator) as Parameters<typeof original>[0]["credential"],
-				}),
+			verifyAuthenticationResponse: (opts: Parameters<typeof original>[0] & { authenticator?: unknown }) => {
+				const raw = opts.credential ?? opts.authenticator
+				// Auth.js fromAdapterAuthenticator uses credentialPublicKey; SimpleWebAuthn v13 expects credential.publicKey
+				const credential =
+					raw && typeof raw === "object" && "credentialPublicKey" in raw && !(raw as { publicKey?: unknown }).publicKey
+						? { ...raw, publicKey: (raw as { credentialPublicKey: unknown }).credentialPublicKey }
+						: raw
+				return original({ ...opts, credential: credential as Parameters<typeof original>[0]["credential"] })
+			},
 		}
 	}
 	return base
