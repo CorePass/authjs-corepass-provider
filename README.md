@@ -35,8 +35,8 @@ sequenceDiagram
   Note over A: If 200, use enrich flow below
 
   B->>S: POST /webauthn/start { email? }
-  Note over B,S: email?: valid email becomes stored as email; if allowCoreIdInput (default true) then invalid email but valid Core ID becomes stored as coreId
-  Note over B,S: Pending: adapter setPending/consumePending or cookie (no separate challenge store)
+  Note over B,S: email (optional). Valid email becomes stored as email; if allowCoreIdInput (default true) then invalid email but valid Core ID becomes stored as coreId
+  Note over B,S: Pending — adapter setPending/consumePending or cookie (no separate challenge store)
   S->>Adapter: setPending(pendingKey, …)
   S-->>B: 200 { options: CreationOptions, pendingKey?, pendingToken? } + Set-Cookie (if cookie strategy)
   B->>B: navigator.credentials.create(options)
