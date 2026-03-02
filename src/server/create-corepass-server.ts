@@ -675,7 +675,7 @@ export function createCorePassServer(options: CreateCorePassServerOptions) {
 					const user = await adapter.createUser!({
 						email: saved.email ?? undefined,
 						emailVerified: null,
-						name: "Pending",
+						name: null,
 						image: null,
 					} as Parameters<NonNullable<typeof adapter.createUser>>[0])
 					const passkeyProviderId = options.providerId ?? "corepass"
