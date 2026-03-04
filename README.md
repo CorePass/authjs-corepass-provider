@@ -131,7 +131,7 @@ const adapter = {
 
 const corepass = createCorePassServer({
   adapter,
-  secret: process.env.COREPASS_SECRET!, // required (cookie + VT encryption)
+  secret: process.env.AUTH_SECRET!, // required (cookie + VT encryption)
   rpID: "example.com",
   rpName: "Example",
   expectedOrigin: "https://example.com",
