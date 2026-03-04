@@ -1,5 +1,6 @@
 export { default as CorePass } from "./provider.js"
 export { default } from "./provider.js"
+export { wrapPasskeyAdapter, CREDENTIALS_SIGNIN_CODE_USER_NOT_FOUND } from "./wrap-passkey-adapter.js"
 
 export type {
 	CorePassAdapter,

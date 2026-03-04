@@ -11,6 +11,7 @@ CorePass provider and server helpers for [Auth.js](https://authjs.dev/) (`@auth/
 ## What you get
 
 - **Provider**: `CorePass()` (wraps Auth.js WebAuthn with passkey-friendly defaults)
+- **Adapter wrapper**: `wrapPasskeyAdapter(adapter)` — when `getAuthenticator` returns null (authenticator not in DB), throws Auth.js `CredentialsSignin` with `code` **`UserNotFound`** so the client receives `error=CredentialsSignin&code=UserNotFound` instead of a generic `error=Configuration`. Export **`CREDENTIALS_SIGNIN_CODE_USER_NOT_FOUND`** (`"UserNotFound"`) for apps that map redirect `code` to messages.
 - **Server helpers**: `createCorePassServer()` exposing handlers:
   - `startRegistration(req)`
   - `finishRegistration(req)`
@@ -60,7 +61,7 @@ sequenceDiagram
 
 ### Login flow (standard Auth.js WebAuthn authenticate)
 
-CorePass login is normal WebAuthn: it uses the Auth.js WebAuthn callback path (`action=authenticate`), and resolves the user by stored authenticators.
+CorePass login is normal WebAuthn: it uses the Auth.js WebAuthn callback path (`action=authenticate`), and resolves the user by stored authenticators. If you pass the adapter through **`wrapPasskeyAdapter()`**, a missing authenticator (e.g. passkey not registered on this device) returns **`error=CredentialsSignin&code=UserNotFound`** instead of **`error=Configuration`** so the client can show a “not found” message.
 
 ```mermaid
 sequenceDiagram
@@ -106,13 +107,19 @@ npm install @auth/core @simplewebauthn/browser
 ```ts
 import { Auth } from "@auth/core"
 import CorePass from "authjs-corepass-provider/provider"
+import { wrapPasskeyAdapter } from "authjs-corepass-provider"
 
+const rawAdapter = /* your Auth.js adapter */
 export const auth = (req: Request) =>
   Auth(req, {
     providers: [CorePass()],
-    adapter: /* your Auth.js adapter */,
+    adapter: wrapPasskeyAdapter(rawAdapter),
   })
 ```
+
+### Login: authenticator not found
+
+By default, when the user signs in with a passkey that is not in the database (e.g. different device, or server restarted with an in-memory store), Auth.js throws a generic error that is surfaced to the client as **`error=Configuration`**, which is ambiguous. Use **`wrapPasskeyAdapter(adapter)`** so that when **`getAuthenticator(credentialID)`** returns **null**, the package throws **`CredentialsSignin`** with **`code: "UserNotFound"`**. The client then receives **`error=CredentialsSignin&code=UserNotFound`** and can show a clear “user/authenticator not found” message (e.g. “Passkey not found. Did you register on this device? Try registering again.”). Import **`CREDENTIALS_SIGNIN_CODE_USER_NOT_FOUND`** (value `"UserNotFound"`) to compare the redirect `code` in your frontend. This applies only when the authenticator is missing; misconfiguration (e.g. missing `AUTH_SECRET`) still fails earlier in the auth config and does not go through the adapter.
 
 ## CorePass endpoints
 
@@ -131,7 +138,7 @@ const adapter = {
 
 const corepass = createCorePassServer({
   adapter,
-  secret: process.env.COREPASS_SECRET!, // required (cookie + VT encryption)
+  secret: process.env.AUTH_SECRET!, // required (cookie + VT encryption)
   rpID: "example.com",
   rpName: "Example",
   expectedOrigin: "https://example.com",
