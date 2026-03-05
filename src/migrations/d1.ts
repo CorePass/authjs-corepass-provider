@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS corepass_pending (
 CREATE INDEX IF NOT EXISTS idx_corepass_pending_expires ON corepass_pending(expires_at);
 `
 
-const AUTHENTICATORS_TABLE_SQL = `
+/** D1 (SQLite): SQL for the WebAuthn authenticators table. Used by migrateD1; also exported for reference. */
+export const AUTHENTICATORS_TABLE_SQL_D1 = `
 CREATE TABLE IF NOT EXISTS authenticators (
   credential_id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
@@ -97,5 +98,5 @@ export async function migrateD1(db: D1Run): Promise<void> {
 		}
 	}
 	await runStatements(db, COREPASS_D1_SCHEMA)
-	await runStatements(db, AUTHENTICATORS_TABLE_SQL)
+	await runStatements(db, AUTHENTICATORS_TABLE_SQL_D1)
 }

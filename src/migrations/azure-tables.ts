@@ -6,6 +6,23 @@
  * @param client - Table client with createTable() (e.g. @azure/data-tables TableClient for your table name)
  */
 
+/** Table name and authenticators entity layout: partitionKey = "AUTHENTICATOR", rowKey = credential_id. */
+export const AUTHENTICATORS_TABLE_AZURE_TABLES = {
+	tableName: "corepass",
+	partitionKeyAuthenticators: "AUTHENTICATOR",
+	rowKey: "credential_id",
+	properties: {
+		user_id: "string",
+		provider_account_id: "string",
+		credential_public_key: "string",
+		counter: "number",
+		credential_device_type: "string",
+		credential_backed_up: "number (0 | 1)",
+		transports: "string | null",
+	},
+	listByUserId: "Use queryEntities with partitionKey 'AUTHENTICATOR' and filter on user_id.",
+} as const
+
 export type AzureTablesMigrationClient = {
 	createTable(): Promise<void>
 }

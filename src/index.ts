@@ -40,6 +40,8 @@ export { migrateAzureTables } from "./migrations/azure-tables.js"
 export type { AzureTablesMigrationClient } from "./migrations/azure-tables.js"
 
 // Authenticators schema/table/collection constants (AUTHENTICATORS_*), alphabetically by adapter
+export { AUTHENTICATORS_TABLE_AZURE_TABLES } from "./migrations/azure-tables.js"
+export { AUTHENTICATORS_TABLE_SQL_D1 } from "./migrations/d1.js"
 export { AUTHENTICATORS_TABLE_KEY_SCHEMA_DYNAMODB } from "./migrations/dynamodb.js"
 export { AUTHENTICATORS_SCHEMA_DGRAPH } from "./migrations/dgraph.js"
 export { AUTHENTICATORS_SCHEMA_EDGEDB } from "./migrations/edgedb.js"
