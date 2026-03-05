@@ -88,10 +88,12 @@ async function runStatements(db: D1Run, sql: string): Promise<void> {
  *
  * @param db - Cloudflare D1 database binding (e.g. env.DB)
  */
+const AUTH_D1_ADAPTER_SPECIFIER = "@auth/d1-adapter"
+
 export async function migrateD1(db: D1Run): Promise<void> {
 	try {
-		const { up } = (await import("@auth/d1-adapter")) as { up: (db: D1Run) => Promise<void> }
-		await up(db)
+		const mod = await import(AUTH_D1_ADAPTER_SPECIFIER) as { up: (db: D1Run) => Promise<void> }
+		await mod.up(db)
 	} catch (e) {
 		if (typeof console !== "undefined" && console.warn) {
 			console.warn("[corepass] Auth.js D1 migration skipped (install @auth/d1-adapter for Auth.js tables):", (e as Error).message)

@@ -414,7 +414,7 @@ CorePass tables:
 
 ### Initializing the database (how to populate tables)
 
-**D1 (Cloudflare)**  
+**D1 (Cloudflare)**
 Run the migration once per database; safe to re-run (uses `CREATE TABLE IF NOT EXISTS`).
 
 ```ts
@@ -427,7 +427,7 @@ await migrateD1(db)
 
 This creates Auth.js tables (if `@auth/d1-adapter` is installed), CorePass tables, and the `authenticators` table. No existing tables or data are dropped or altered.
 
-**Azure Table Storage**  
+**Azure Table Storage**
 Create the table once (e.g. in a deploy step or one-off script).
 
 ```ts
@@ -438,7 +438,7 @@ const client = new TableClient(connectionString, "corepass")
 await migrateAzureTables(client)
 ```
 
-**Other adapters (Postgres, Supabase, Xata, Redis, etc.)**  
+**Other adapters (Postgres, Supabase, Xata, Redis, etc.)**
 There is no migration runner; use the exported **authenticators schema constant** for your adapter and apply it yourself:
 
 - **Postgres / Neon / Prisma / Drizzle / Kysely / TypeORM / MikroORM / Sequelize / Supabase / Hasura**: use `AUTHENTICATORS_TABLE_SQL_POSTGRES` (or the adapter-specific re-export, e.g. `AUTHENTICATORS_TABLE_SQL_PRISMA`) and run the SQL.
