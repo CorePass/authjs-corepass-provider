@@ -34,8 +34,6 @@ export {
 	deriveEd448PublicKeyFromCoreId,
 } from "./server/coreid.js"
 
-export { corepassPostgresAdapter } from "./adapters/postgres.js"
-export { corepassD1Adapter } from "./adapters/d1.js"
 // Migration runners and types
 export { migrateD1 } from "./migrations/d1.js"
 export { migrateAzureTables } from "./migrations/azure-tables.js"
@@ -63,6 +61,9 @@ export { AUTHENTICATORS_TABLE_SQL_TYPEORM } from "./migrations/typeorm.js"
 export { AUTHENTICATORS_KEY_UNSTORAGE } from "./migrations/unstorage.js"
 export { AUTHENTICATORS_KEY_UPSTASH_REDIS } from "./migrations/upstash-redis.js"
 export { AUTHENTICATORS_TABLE_XATA } from "./migrations/xata.js"
+
+export { corepassPostgresAdapter } from "./adapters/postgres.js"
+export { corepassD1Adapter } from "./adapters/d1.js"
 export { corepassSupabaseAdapter } from "./adapters/supabase.js"
 export { corepassXataAdapter } from "./adapters/xata.js"
 export { corepassDynamoAdapter } from "./adapters/dynamodb.js"
