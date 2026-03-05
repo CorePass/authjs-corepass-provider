@@ -1,3 +1,4 @@
+import type { AdapterAuthenticator } from "@auth/core/adapters"
 import type { CorePassStore, CorePassTx } from "../types.js"
 
 /**
@@ -44,13 +45,24 @@ export type FaunaCorePassLike = {
 		kyc_doc: string | null
 		provided_till: number | null
 	} | null>
+	/** Optional: for WebAuthn passkey support. If omitted, getAuthenticator returns null, listAuthenticatorsByUserId returns [], create/update throw. */
+	getAuthenticator?: (credentialID: string) => Promise<AdapterAuthenticator | null>
+	createAuthenticator?: (authenticator: AdapterAuthenticator) => Promise<AdapterAuthenticator>
+	updateAuthenticatorCounter?: (credentialID: string, newCounter: number) => Promise<AdapterAuthenticator>
+	listAuthenticatorsByUserId?: (userId: string) => Promise<AdapterAuthenticator[]>
 }
 
 /**
- * CorePass store + pending for Fauna. Pass a wrapper that implements FaunaCorePassLike (using Fauna FQL).
+ * CorePass store + pending + optional WebAuthn for Fauna. Pass a wrapper that implements FaunaCorePassLike (using Fauna FQL).
+ * For passkey support, implement getAuthenticator, createAuthenticator, updateAuthenticatorCounter, listAuthenticatorsByUserId on the client (e.g. collection corepass_authenticators). See migrations/fauna.
  * Merge with your Auth.js Fauna adapter: adapter = { ...authAdapter, ...corepassFaunaAdapter(faunaCorePass) }
  */
-export function corepassFaunaAdapter(client: FaunaCorePassLike): CorePassStore & CorePassTx {
+export function corepassFaunaAdapter(client: FaunaCorePassLike): CorePassStore & CorePassTx & {
+	getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null>
+	createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator>
+	updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator>
+	listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]>
+} {
 	return {
 		async setPending(params, _ctx) {
 			const expiresAtSec = Math.floor(params.expiresAt.getTime() / 1000)
@@ -111,6 +123,23 @@ export function corepassFaunaAdapter(client: FaunaCorePassLike): CorePassStore &
 				kycDoc: row.kyc_doc ?? null,
 				providedTill: row.provided_till ?? null,
 			}
+		},
+
+		async getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null> {
+			if (client.getAuthenticator) return client.getAuthenticator(credentialID)
+			return null
+		},
+		async createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator> {
+			if (client.createAuthenticator) return client.createAuthenticator(authenticator)
+			throw new Error("FaunaCorePassLike.createAuthenticator is not implemented; add WebAuthn support to your Fauna client.")
+		},
+		async updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator> {
+			if (client.updateAuthenticatorCounter) return client.updateAuthenticatorCounter(credentialID, newCounter)
+			throw new Error("FaunaCorePassLike.updateAuthenticatorCounter is not implemented; add WebAuthn support to your Fauna client.")
+		},
+		async listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]> {
+			if (client.listAuthenticatorsByUserId) return client.listAuthenticatorsByUserId(userId)
+			return []
 		},
 	}
 }

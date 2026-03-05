@@ -1,3 +1,4 @@
+import type { AdapterAuthenticator } from "@auth/core/adapters"
 import type { CorePassStore, CorePassTx } from "../types.js"
 
 /**
@@ -23,16 +24,34 @@ function boolFromDb(v: unknown): boolean | null {
 	return (v as number) === 1
 }
 
+function rowToAuthenticator(row: Record<string, unknown>): AdapterAuthenticator {
+	return {
+		credentialID: String(row.credential_id ?? ""),
+		userId: String(row.user_id ?? ""),
+		providerAccountId: String(row.provider_account_id ?? ""),
+		credentialPublicKey: String(row.credential_public_key ?? ""),
+		counter: typeof row.counter === "number" ? row.counter : 0,
+		credentialDeviceType: String(row.credential_device_type ?? ""),
+		credentialBackedUp: (row.credential_backed_up as number) === 1,
+		transports: row.transports != null ? String(row.transports) : null,
+	}
+}
+
 export type CorePassMikroORMAdapterOptions = {
 	client: MikroORMLike
 	schema?: string
 }
 
 /**
- * CorePass store + pending for MikroORM (Postgres). Use with EntityManager.getConnection().execute().
+ * CorePass store + pending + WebAuthn for MikroORM (Postgres). Table: authenticators (see migrations/mikro-orm).
  * Merge with your Auth.js MikroORM adapter: adapter = { ...authAdapter, ...corepassMikroORMAdapter({ client: em.getConnection(), schema }) }
  */
-export function corepassMikroORMAdapter(opts: CorePassMikroORMAdapterOptions): CorePassStore & CorePassTx {
+export function corepassMikroORMAdapter(opts: CorePassMikroORMAdapterOptions): CorePassStore & CorePassTx & {
+	getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null>
+	createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator>
+	updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator>
+	listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]>
+} {
 	const { client, schema } = opts
 	const pre = schema ? `"${schema}".` : ""
 
@@ -146,6 +165,52 @@ export function corepassMikroORMAdapter(opts: CorePassMikroORMAdapterOptions): C
 				kycDoc: row.kyc_doc ?? null,
 				providedTill: row.provided_till ?? null,
 			}
+		},
+
+		async getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null> {
+			const rows = await query<Record<string, unknown>>(
+				`SELECT credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports FROM ${pre}authenticators WHERE credential_id = $1`,
+				[credentialID]
+			)
+			const row = rows[0]
+			if (!row) return null
+			return rowToAuthenticator(row)
+		},
+		async createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator> {
+			await execute(
+				`INSERT INTO ${pre}authenticators (credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+				[
+					authenticator.credentialID,
+					authenticator.userId,
+					authenticator.providerAccountId,
+					authenticator.credentialPublicKey,
+					authenticator.counter,
+					authenticator.credentialDeviceType,
+					authenticator.credentialBackedUp ? 1 : 0,
+					authenticator.transports ?? null,
+				]
+			)
+			return authenticator
+		},
+		async updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator> {
+			const rows = await query<Record<string, unknown>>(
+				`SELECT credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports FROM ${pre}authenticators WHERE credential_id = $1`,
+				[credentialID]
+			)
+			const row = rows[0]
+			if (!row) throw new Error(`Authenticator not found: ${credentialID}`)
+			await execute(`UPDATE ${pre}authenticators SET counter = $1 WHERE credential_id = $2`, [
+				newCounter,
+				credentialID,
+			])
+			return rowToAuthenticator({ ...row, counter: newCounter })
+		},
+		async listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]> {
+			const rows = await query<Record<string, unknown>>(
+				`SELECT credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports FROM ${pre}authenticators WHERE user_id = $1`,
+				[userId]
+			)
+			return rows.map(rowToAuthenticator)
 		},
 	}
 }

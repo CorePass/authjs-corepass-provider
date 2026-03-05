@@ -1,3 +1,4 @@
+import type { AdapterAuthenticator } from "@auth/core/adapters"
 import type { CorePassStore, CorePassTx } from "../types.js"
 
 /**
@@ -15,6 +16,7 @@ export type PouchDBLike = {
 const PENDING_PREFIX = "corepass_pending:"
 const IDENTITY_PREFIX = "corepass_identity:"
 const PROFILE_PREFIX = "corepass_profile:"
+const AUTHENTICATOR_PREFIX = "corepass_authenticator:"
 
 function nowSec(): number {
 	return Math.floor(Date.now() / 1000)
@@ -31,12 +33,29 @@ function boolFromDb(v: unknown): boolean | null {
 	return (v as number) === 1
 }
 
+function docToAuthenticator(doc: Record<string, unknown>): AdapterAuthenticator {
+	return {
+		credentialID: String(doc.credential_id ?? ""),
+		userId: String(doc.user_id ?? ""),
+		providerAccountId: String(doc.provider_account_id ?? ""),
+		credentialPublicKey: String(doc.credential_public_key ?? ""),
+		counter: typeof doc.counter === "number" ? doc.counter : 0,
+		credentialDeviceType: String(doc.credential_device_type ?? ""),
+		credentialBackedUp: (doc.credential_backed_up as number) === 1,
+		transports: doc.transports != null ? String(doc.transports) : null,
+	}
+}
+
 /**
- * CorePass store + pending for PouchDB.
+ * CorePass store + pending + WebAuthn for PouchDB. Doc _id: corepass_pending:{key}, corepass_identity:{core_id}, corepass_profile:{user_id}, corepass_authenticator:{credential_id}. Optional find() for listAuthenticatorsByUserId. See migrations/pouchdb.
  * Merge with your Auth.js PouchDB adapter: adapter = { ...authAdapter, ...corepassPouchAdapter(db) }
- * Uses doc _id: corepass_pending:{key}, corepass_identity:{core_id}, corepass_profile:{user_id}.
  */
-export function corepassPouchAdapter(db: PouchDBLike): CorePassStore & CorePassTx {
+export function corepassPouchAdapter(db: PouchDBLike): CorePassStore & CorePassTx & {
+	getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null>
+	createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator>
+	updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator>
+	listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]>
+} {
 	function idPending(key: string) {
 		return PENDING_PREFIX + key
 	}
@@ -45,6 +64,9 @@ export function corepassPouchAdapter(db: PouchDBLike): CorePassStore & CorePassT
 	}
 	function idProfile(userId: string) {
 		return PROFILE_PREFIX + userId
+	}
+	function idAuthenticator(credentialId: string) {
+		return AUTHENTICATOR_PREFIX + credentialId
 	}
 
 	return {
@@ -142,6 +164,46 @@ export function corepassPouchAdapter(db: PouchDBLike): CorePassStore & CorePassT
 				kycDoc: doc.kyc_doc != null ? String(doc.kyc_doc) : null,
 				providedTill: typeof doc.provided_till === "number" ? doc.provided_till : null,
 			}
+		},
+
+		async getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null> {
+			const doc = await db.get(idAuthenticator(credentialID))
+			if (!doc) return null
+			return docToAuthenticator(doc)
+		},
+		async createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator> {
+			const _id = idAuthenticator(authenticator.credentialID)
+			const existing = await db.get(_id)
+			await db.put({
+				_id,
+				...(existing?._rev && { _rev: existing._rev }),
+				credential_id: authenticator.credentialID,
+				user_id: authenticator.userId,
+				provider_account_id: authenticator.providerAccountId,
+				credential_public_key: authenticator.credentialPublicKey,
+				counter: authenticator.counter,
+				credential_device_type: authenticator.credentialDeviceType,
+				credential_backed_up: authenticator.credentialBackedUp ? 1 : 0,
+				transports: authenticator.transports ?? null,
+			} as Record<string, unknown> & { _id: string; _rev?: string })
+			return authenticator
+		},
+		async updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator> {
+			const _id = idAuthenticator(credentialID)
+			const doc = await db.get(_id)
+			if (!doc || !doc._rev) throw new Error(`Authenticator not found: ${credentialID}`)
+			await db.put({
+				...doc,
+				_id,
+				_rev: doc._rev,
+				counter: newCounter,
+			} as Record<string, unknown> & { _id: string; _rev: string })
+			return docToAuthenticator({ ...doc, counter: newCounter })
+		},
+		async listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]> {
+			if (!db.find) return []
+			const res = await db.find({ selector: { user_id: userId } } as { selector: Record<string, unknown> })
+			return res.docs.map(docToAuthenticator)
 		},
 	}
 }

@@ -1,11 +1,28 @@
+import type { AdapterAuthenticator } from "@auth/core/adapters"
 import type { CorePassStore, CorePassTx } from "../types.js"
 
+/** D1/SQLite–like interface (Cloudflare D1). Includes .all() for list queries. */
 export type D1Like = {
 	prepare: (sql: string) => {
 		bind: (...params: unknown[]) => {
 			run: () => Promise<unknown>
 			first: <T = unknown>() => Promise<T | null>
+			all?: <T = unknown>() => Promise<{ results: T[] }>
 		}
+		run?: () => Promise<unknown>
+	}
+}
+
+function rowToAuthenticator(row: Record<string, unknown>): AdapterAuthenticator {
+	return {
+		credentialID: row.credential_id as string,
+		userId: row.user_id as string,
+		providerAccountId: row.provider_account_id as string,
+		credentialPublicKey: row.credential_public_key as string,
+		counter: (row.counter as number) ?? 0,
+		credentialDeviceType: row.credential_device_type as string,
+		credentialBackedUp: (row.credential_backed_up as number) === 1,
+		transports: (row.transports as string) ?? null,
 	}
 }
 
@@ -25,10 +42,17 @@ function boolFromDb(v: unknown): boolean | null {
 }
 
 /**
- * CorePass store + pending (key/payload) for D1/SQLite.
- * Merge with your Auth.js D1 adapter: adapter = { ...authAdapter, ...corepassD1Adapter(db) }
+ * CorePass store + pending + WebAuthn authenticator methods for D1/SQLite.
+ * Tables must exist before use; run migrateD1(db) once to create Auth.js + CorePass + authenticators.
+ * Merge with your Auth.js D1 adapter: adapter = { ...D1Adapter(db), ...corepassD1Adapter(db) }
+ * @see https://authjs.dev/getting-started/providers/passkey
  */
-export function corepassD1Adapter(db: D1Like): CorePassStore & CorePassTx {
+export async function corepassD1Adapter(db: D1Like): Promise<CorePassStore & CorePassTx & {
+	getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null>
+	createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator>
+	updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator>
+	listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]>
+}> {
 	return {
 		async setPending(params, _ctx) {
 			const expiresAtSec = Math.floor(params.expiresAt.getTime() / 1000)
@@ -143,6 +167,59 @@ export function corepassD1Adapter(db: D1Like): CorePassStore & CorePassTx {
 				kycDoc: row.kyc_doc ?? null,
 				providedTill: row.provided_till ?? null,
 			}
+		},
+
+		// WebAuthn / Passkey (Auth.js adapter optional methods)
+		async getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null> {
+			const row = await db
+				.prepare(
+					"SELECT credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports FROM authenticators WHERE credential_id = ?1"
+				)
+				.bind(credentialID)
+				.first<Record<string, unknown>>()
+			return row ? rowToAuthenticator(row) : null
+		},
+		async createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator> {
+			await db
+				.prepare(
+					"INSERT INTO authenticators (credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+				)
+				.bind(
+					authenticator.credentialID,
+					authenticator.userId,
+					authenticator.providerAccountId,
+					authenticator.credentialPublicKey,
+					authenticator.counter,
+					authenticator.credentialDeviceType,
+					authenticator.credentialBackedUp ? 1 : 0,
+					authenticator.transports ?? null
+				)
+				.run()
+			return authenticator
+		},
+		async updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator> {
+			await db
+				.prepare("UPDATE authenticators SET counter = ?1 WHERE credential_id = ?2")
+				.bind(newCounter, credentialID)
+				.run()
+			const row = await db
+				.prepare(
+					"SELECT credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports FROM authenticators WHERE credential_id = ?1"
+				)
+				.bind(credentialID)
+				.first<Record<string, unknown>>()
+			if (!row) throw new Error(`Authenticator not found: ${credentialID}`)
+			return rowToAuthenticator(row)
+		},
+		async listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]> {
+			const stmt = db
+				.prepare(
+					"SELECT credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports FROM authenticators WHERE user_id = ?1"
+				)
+				.bind(userId)
+			const result = stmt.all ? await stmt.all<Record<string, unknown>>() : { results: [] }
+			const rows = result && typeof result === "object" && "results" in result ? (result.results ?? []) : []
+			return rows.map(rowToAuthenticator)
 		},
 	}
 }

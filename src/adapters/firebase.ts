@@ -1,8 +1,9 @@
+import type { AdapterAuthenticator } from "@auth/core/adapters"
 import type { CorePassStore, CorePassTx } from "../types.js"
 
 /**
  * Minimal Firestore-like client. Use with Firebase Admin or firebase/firestore.
- * Collections: corepass_pending (doc id = key), corepass_identities (doc id = core_id), corepass_profiles (doc id = user_id).
+ * Collections: corepass_pending (doc id = key), corepass_identities (doc id = core_id), corepass_profiles (doc id = user_id), corepass_authenticators (doc id = credential_id).
  * @see https://authjs.dev/getting-started/database — Firebase
  */
 export type FirestoreLike = {
@@ -21,6 +22,7 @@ export type FirestoreLike = {
 const PENDING_COLLECTION = "corepass_pending"
 const IDENTITIES_COLLECTION = "corepass_identities"
 const PROFILES_COLLECTION = "corepass_profiles"
+const AUTHENTICATORS_COLLECTION = "corepass_authenticators"
 
 function nowSec(): number {
 	return Math.floor(Date.now() / 1000)
@@ -37,23 +39,43 @@ function boolFromDb(v: unknown): boolean | null {
 	return (v as number) === 1
 }
 
+function rowToAuthenticator(row: Record<string, unknown>): AdapterAuthenticator {
+	return {
+		credentialID: String(row.credential_id ?? ""),
+		userId: String(row.user_id ?? ""),
+		providerAccountId: String(row.provider_account_id ?? ""),
+		credentialPublicKey: String(row.credential_public_key ?? ""),
+		counter: typeof row.counter === "number" ? row.counter : 0,
+		credentialDeviceType: String(row.credential_device_type ?? ""),
+		credentialBackedUp: (row.credential_backed_up as number) === 1,
+		transports: row.transports != null ? String(row.transports) : null,
+	}
+}
+
 export type CorePassFirebaseAdapterOptions = {
 	client: FirestoreLike
 	pendingCollection?: string
 	identitiesCollection?: string
 	profilesCollection?: string
+	authenticatorsCollection?: string
 }
 
 /**
- * CorePass store + pending for Firebase Firestore.
+ * CorePass store + pending + WebAuthn for Firebase Firestore. Authenticators: doc id = credential_id; query by user_id for list.
  * Merge with your Auth.js Firebase adapter: adapter = { ...authAdapter, ...corepassFirebaseAdapter({ client: firestore }) }
  */
-export function corepassFirebaseAdapter(opts: CorePassFirebaseAdapterOptions): CorePassStore & CorePassTx {
+export function corepassFirebaseAdapter(opts: CorePassFirebaseAdapterOptions): CorePassStore & CorePassTx & {
+	getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null>
+	createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator>
+	updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator>
+	listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]>
+} {
 	const {
 		client,
 		pendingCollection = PENDING_COLLECTION,
 		identitiesCollection = IDENTITIES_COLLECTION,
 		profilesCollection = PROFILES_COLLECTION,
+		authenticatorsCollection = AUTHENTICATORS_COLLECTION,
 	} = opts
 
 	return {
@@ -144,6 +166,41 @@ export function corepassFirebaseAdapter(opts: CorePassFirebaseAdapterOptions): C
 				kycDoc: row.kyc_doc != null ? String(row.kyc_doc) : null,
 				providedTill: typeof row.provided_till === "number" ? row.provided_till : null,
 			}
+		},
+
+		async getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null> {
+			const snap = await client.collection(authenticatorsCollection).doc(credentialID).get()
+			if (!snap.exists) return null
+			return rowToAuthenticator(snap.data()!)
+		},
+		async createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator> {
+			await client.collection(authenticatorsCollection).doc(authenticator.credentialID).set({
+				credential_id: authenticator.credentialID,
+				user_id: authenticator.userId,
+				provider_account_id: authenticator.providerAccountId,
+				credential_public_key: authenticator.credentialPublicKey,
+				counter: authenticator.counter,
+				credential_device_type: authenticator.credentialDeviceType,
+				credential_backed_up: authenticator.credentialBackedUp ? 1 : 0,
+				transports: authenticator.transports ?? null,
+			})
+			return authenticator
+		},
+		async updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator> {
+			const ref = client.collection(authenticatorsCollection).doc(credentialID)
+			const snap = await ref.get()
+			if (!snap.exists) throw new Error(`Authenticator not found: ${credentialID}`)
+			const row = snap.data()!
+			await ref.set({ ...row, counter: newCounter })
+			return rowToAuthenticator({ ...row, counter: newCounter })
+		},
+		async listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]> {
+			const snap = await client
+				.collection(authenticatorsCollection)
+				.where("user_id", "==", userId)
+				.limit(100)
+				.get()
+			return snap.docs.map((d) => rowToAuthenticator(d.data()))
 		},
 	}
 }

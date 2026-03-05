@@ -1,8 +1,9 @@
+import type { AdapterAuthenticator } from "@auth/core/adapters"
 import type { CorePassStore, CorePassTx } from "../types.js"
 
 /**
  * Minimal Unstorage-like interface (get/set/remove). Use with unstorage, Vercel KV, or compatible drivers.
- * Keys: corepass_pending:{key}, corepass_identity:{core_id}, corepass_profile:{user_id}. Values are JSON.
+ * Keys: corepass_pending:{key}, corepass_identity:{core_id}, corepass_profile:{user_id}, corepass_authenticator:{credential_id}. Values are JSON.
  * @see https://authjs.dev/getting-started/database — Unstorage
  */
 export type UnstorageLike = {
@@ -15,6 +16,7 @@ export type UnstorageLike = {
 const PENDING_PREFIX = "corepass_pending:"
 const IDENTITY_PREFIX = "corepass_identity:"
 const PROFILE_PREFIX = "corepass_profile:"
+const AUTHENTICATOR_PREFIX = "corepass_authenticator:"
 
 function nowSec(): number {
 	return Math.floor(Date.now() / 1000)
@@ -31,12 +33,30 @@ function boolFromDb(v: unknown): boolean | null {
 	return (v as number) === 1
 }
 
+function rowToAuthenticator(row: Record<string, unknown>): AdapterAuthenticator {
+	return {
+		credentialID: String(row.credential_id ?? ""),
+		userId: String(row.user_id ?? ""),
+		providerAccountId: String(row.provider_account_id ?? ""),
+		credentialPublicKey: String(row.credential_public_key ?? ""),
+		counter: typeof row.counter === "number" ? row.counter : 0,
+		credentialDeviceType: String(row.credential_device_type ?? ""),
+		credentialBackedUp: (row.credential_backed_up as number) === 1,
+		transports: row.transports != null ? String(row.transports) : null,
+	}
+}
+
 /**
- * CorePass store + pending for Unstorage (Vercel KV, etc).
+ * CorePass store + pending + WebAuthn for Unstorage (Vercel KV, etc). Optional getItems(prefix) for getIdentityByUserId and listAuthenticatorsByUserId.
  * Merge with your Auth.js Unstorage adapter: adapter = { ...authAdapter, ...corepassUnstorageAdapter(storage) }
- * For getIdentityByUserId to work, provide getItems(prefix) or ensure identity keys are discoverable.
+ * See migrations/unstorage for key layout.
  */
-export function corepassUnstorageAdapter(storage: UnstorageLike): CorePassStore & CorePassTx {
+export function corepassUnstorageAdapter(storage: UnstorageLike): CorePassStore & CorePassTx & {
+	getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null>
+	createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator>
+	updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator>
+	listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]>
+} {
 	return {
 		async setPending(params, _ctx) {
 			const key = PENDING_PREFIX + params.key
@@ -141,6 +161,56 @@ export function corepassUnstorageAdapter(storage: UnstorageLike): CorePassStore 
 			} catch {
 				return null
 			}
+		},
+
+		async getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null> {
+			const key = AUTHENTICATOR_PREFIX + credentialID
+			const raw = await storage.getItem(key)
+			if (!raw) return null
+			try {
+				const row = JSON.parse(raw) as Record<string, unknown>
+				return rowToAuthenticator(row)
+			} catch {
+				return null
+			}
+		},
+		async createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator> {
+			const key = AUTHENTICATOR_PREFIX + authenticator.credentialID
+			const value = JSON.stringify({
+				credential_id: authenticator.credentialID,
+				user_id: authenticator.userId,
+				provider_account_id: authenticator.providerAccountId,
+				credential_public_key: authenticator.credentialPublicKey,
+				counter: authenticator.counter,
+				credential_device_type: authenticator.credentialDeviceType,
+				credential_backed_up: authenticator.credentialBackedUp ? 1 : 0,
+				transports: authenticator.transports ?? null,
+			})
+			await storage.setItem(key, value)
+			return authenticator
+		},
+		async updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator> {
+			const key = AUTHENTICATOR_PREFIX + credentialID
+			const raw = await storage.getItem(key)
+			if (!raw) throw new Error(`Authenticator not found: ${credentialID}`)
+			const row = JSON.parse(raw) as Record<string, unknown>
+			row.counter = newCounter
+			await storage.setItem(key, JSON.stringify(row))
+			return rowToAuthenticator(row)
+		},
+		async listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]> {
+			if (!storage.getItems) return []
+			const items = await storage.getItems(AUTHENTICATOR_PREFIX)
+			const out: AdapterAuthenticator[] = []
+			for (const { value } of items) {
+				try {
+					const row = JSON.parse(value) as Record<string, unknown>
+					if (String(row.user_id) === userId) out.push(rowToAuthenticator(row))
+				} catch {
+					// skip
+				}
+			}
+			return out
 		},
 	}
 }

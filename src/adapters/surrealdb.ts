@@ -1,3 +1,4 @@
+import type { AdapterAuthenticator } from "@auth/core/adapters"
 import type { CorePassStore, CorePassTx } from "../types.js"
 
 /**
@@ -24,6 +25,19 @@ function boolFromDb(v: unknown): boolean | null {
 	return (v as number) === 1
 }
 
+function rowToAuthenticator(row: Record<string, unknown>): AdapterAuthenticator {
+	return {
+		credentialID: String(row.credential_id ?? ""),
+		userId: String(row.user_id ?? ""),
+		providerAccountId: String(row.provider_account_id ?? ""),
+		credentialPublicKey: String(row.credential_public_key ?? ""),
+		counter: typeof row.counter === "number" ? row.counter : 0,
+		credentialDeviceType: String(row.credential_device_type ?? ""),
+		credentialBackedUp: (row.credential_backed_up as number) === 1,
+		transports: row.transports != null ? String(row.transports) : null,
+	}
+}
+
 export type CorePassSurrealDBAdapterOptions = {
 	client: SurrealDBLike
 	namespace?: string
@@ -31,11 +45,15 @@ export type CorePassSurrealDBAdapterOptions = {
 }
 
 /**
- * CorePass store + pending for SurrealDB. Use with surrealdb.js.
+ * CorePass store + pending + WebAuthn for SurrealDB. Tables: corepass_pending, corepass_identities, corepass_profiles, corepass_authenticators (see migrations/surrealdb or db/corepass-schema.surrealdb.surql).
  * Merge with your Auth.js SurrealDB adapter: adapter = { ...authAdapter, ...corepassSurrealDBAdapter({ client }) }
- * Tables: corepass_pending, corepass_identities, corepass_profiles (create with appropriate schema).
  */
-export function corepassSurrealDBAdapter(opts: CorePassSurrealDBAdapterOptions): CorePassStore & CorePassTx {
+export function corepassSurrealDBAdapter(opts: CorePassSurrealDBAdapterOptions): CorePassStore & CorePassTx & {
+	getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null>
+	createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator>
+	updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator>
+	listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]>
+} {
 	const { client } = opts
 
 	async function getRows<T>(sql: string, params: Record<string, unknown> = {}): Promise<T[]> {
@@ -148,6 +166,53 @@ export function corepassSurrealDBAdapter(opts: CorePassSurrealDBAdapterOptions):
 				kycDoc: row.kyc_doc ?? null,
 				providedTill: row.provided_till ?? null,
 			}
+		},
+
+		async getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null> {
+			const rows = await getRows<Record<string, unknown>>(
+				`SELECT credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports FROM corepass_authenticators WHERE credential_id = $credentialID`,
+				{ credentialID }
+			)
+			const row = rows[0]
+			if (!row) return null
+			return rowToAuthenticator(row)
+		},
+		async createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator> {
+			await client.query(
+				`INSERT INTO corepass_authenticators (credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports) VALUES ($credential_id, $user_id, $provider_account_id, $credential_public_key, $counter, $credential_device_type, $credential_backed_up, $transports)
+				 ON DUPLICATE KEY UPDATE user_id = $user_id, provider_account_id = $provider_account_id, credential_public_key = $credential_public_key, counter = $counter, credential_device_type = $credential_device_type, credential_backed_up = $credential_backed_up, transports = $transports`,
+				{
+					credential_id: authenticator.credentialID,
+					user_id: authenticator.userId,
+					provider_account_id: authenticator.providerAccountId,
+					credential_public_key: authenticator.credentialPublicKey,
+					counter: authenticator.counter,
+					credential_device_type: authenticator.credentialDeviceType,
+					credential_backed_up: authenticator.credentialBackedUp ? 1 : 0,
+					transports: authenticator.transports ?? null,
+				}
+			)
+			return authenticator
+		},
+		async updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator> {
+			const rows = await getRows<Record<string, unknown>>(
+				`SELECT credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports FROM corepass_authenticators WHERE credential_id = $credentialID`,
+				{ credentialID }
+			)
+			const row = rows[0]
+			if (!row) throw new Error(`Authenticator not found: ${credentialID}`)
+			await client.query(
+				`UPDATE corepass_authenticators SET counter = $counter WHERE credential_id = $credentialID`,
+				{ counter: newCounter, credentialID }
+			)
+			return rowToAuthenticator({ ...row, counter: newCounter })
+		},
+		async listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]> {
+			const rows = await getRows<Record<string, unknown>>(
+				`SELECT credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports FROM corepass_authenticators WHERE user_id = $userId`,
+				{ userId }
+			)
+			return rows.map(rowToAuthenticator)
 		},
 	}
 }

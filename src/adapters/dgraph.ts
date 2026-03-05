@@ -1,7 +1,9 @@
+import type { AdapterAuthenticator } from "@auth/core/adapters"
 import type { CorePassStore, CorePassTx } from "../types.js"
 
 /**
  * Dgraph adapter uses a small interface you implement with DQL or GraphQL.
+ * Add the optional WebAuthn methods for passkey support; apply AUTHENTICATORS_SCHEMA_DGRAPH from migrations/dgraph to your Dgraph schema.
  * @see https://authjs.dev/getting-started/database — Dgraph
  */
 export type DgraphCorePassLike = {
@@ -20,6 +22,11 @@ export type DgraphCorePassLike = {
 		kyc_doc: string | null
 		provided_till: number | null
 	} | null>
+	/** Optional: for WebAuthn passkey support. Implement and apply AUTHENTICATORS_SCHEMA_DGRAPH. */
+	getAuthenticator?: (credentialID: string) => Promise<AdapterAuthenticator | null>
+	createAuthenticator?: (authenticator: AdapterAuthenticator) => Promise<AdapterAuthenticator>
+	updateAuthenticatorCounter?: (credentialID: string, newCounter: number) => Promise<AdapterAuthenticator>
+	listAuthenticatorsByUserId?: (userId: string) => Promise<AdapterAuthenticator[]>
 }
 
 function boolToDb(v: boolean | null | undefined): number | null {
@@ -34,10 +41,17 @@ function boolFromDb(v: unknown): boolean | null {
 }
 
 /**
- * CorePass store + pending for Dgraph. Pass a wrapper that implements DgraphCorePassLike (using DQL/GraphQL).
+ * CorePass store + pending + optional WebAuthn authenticator methods for Dgraph.
+ * Pass a wrapper that implements DgraphCorePassLike (using DQL/GraphQL).
+ * If the client implements getAuthenticator/createAuthenticator/updateAuthenticatorCounter/listAuthenticatorsByUserId, passkey is supported.
  * Merge with your Auth.js Dgraph adapter: adapter = { ...authAdapter, ...corepassDgraphAdapter(dgraphCorePass) }
  */
-export function corepassDgraphAdapter(client: DgraphCorePassLike): CorePassStore & CorePassTx {
+export function corepassDgraphAdapter(client: DgraphCorePassLike): CorePassStore & CorePassTx & {
+	getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null>
+	createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator>
+	updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator>
+	listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]>
+} {
 	return {
 		async setPending(params, _ctx) {
 			const expiresAtSec = Math.floor(params.expiresAt.getTime() / 1000)
@@ -98,6 +112,24 @@ export function corepassDgraphAdapter(client: DgraphCorePassLike): CorePassStore
 				kycDoc: row.kyc_doc ?? null,
 				providedTill: row.provided_till ?? null,
 			}
+		},
+
+		// WebAuthn / Passkey: delegate to client when implemented
+		async getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null> {
+			if (client.getAuthenticator) return client.getAuthenticator(credentialID)
+			return null
+		},
+		async createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator> {
+			if (client.createAuthenticator) return client.createAuthenticator(authenticator)
+			throw new Error("Passkey not supported: implement createAuthenticator on your Dgraph client and apply AUTHENTICATORS_SCHEMA_DGRAPH")
+		},
+		async updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator> {
+			if (client.updateAuthenticatorCounter) return client.updateAuthenticatorCounter(credentialID, newCounter)
+			throw new Error("Passkey not supported: implement updateAuthenticatorCounter on your Dgraph client")
+		},
+		async listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]> {
+			if (client.listAuthenticatorsByUserId) return client.listAuthenticatorsByUserId(userId)
+			return []
 		},
 	}
 }
