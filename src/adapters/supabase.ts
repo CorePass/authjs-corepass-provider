@@ -1,3 +1,4 @@
+import type { AdapterAuthenticator } from "@auth/core/adapters"
 import type { CorePassStore, CorePassTx } from "../types.js"
 
 export type SupabaseLike = {
@@ -28,14 +29,33 @@ function maybeFirst<T>(res: { data: unknown[] | null; error: unknown }): T | nul
 	return res.data[0] as T
 }
 
+function rowToAuthenticator(row: Record<string, unknown>): AdapterAuthenticator {
+	return {
+		credentialID: String(row.credential_id ?? ""),
+		userId: String(row.user_id ?? ""),
+		providerAccountId: String(row.provider_account_id ?? ""),
+		credentialPublicKey: String(row.credential_public_key ?? ""),
+		counter: typeof row.counter === "number" ? row.counter : 0,
+		credentialDeviceType: String(row.credential_device_type ?? ""),
+		credentialBackedUp: (row.credential_backed_up as number) === 1,
+		transports: row.transports != null ? String(row.transports) : null,
+	}
+}
+
 /**
- * CorePass store + pending (key/payload) for Supabase (Postgres).
+ * CorePass store + pending + WebAuthn for Supabase (Postgres). Table: authenticators (see migrations/supabase).
  * Merge with your Auth.js Supabase adapter: adapter = { ...authAdapter, ...corepassSupabaseAdapter(supabase) }
  */
-export function corepassSupabaseAdapter(supabase: SupabaseLike): CorePassStore & CorePassTx {
+export function corepassSupabaseAdapter(supabase: SupabaseLike): CorePassStore & CorePassTx & {
+	getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null>
+	createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator>
+	updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator>
+	listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]>
+} {
 	const tablePending = "corepass_pending"
 	const tableIdentities = "corepass_identities"
 	const tableProfiles = "corepass_profiles"
+	const tableAuthenticators = "authenticators"
 
 	return {
 		async setPending(params, _ctx) {
@@ -133,6 +153,53 @@ export function corepassSupabaseAdapter(supabase: SupabaseLike): CorePassStore &
 				kycDoc: row.kyc_doc ?? null,
 				providedTill: row.provided_till ?? null,
 			}
+		},
+
+		async getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null> {
+			const res = await supabase
+				.from(tableAuthenticators)
+				.select("credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports")
+				.eq("credential_id", credentialID)
+			const row = maybeFirst<Record<string, unknown>>(res as { data: unknown[]; error: unknown })
+			if (!row) return null
+			return rowToAuthenticator(row)
+		},
+		async createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator> {
+			await supabase.from(tableAuthenticators).upsert(
+				{
+					credential_id: authenticator.credentialID,
+					user_id: authenticator.userId,
+					provider_account_id: authenticator.providerAccountId,
+					credential_public_key: authenticator.credentialPublicKey,
+					counter: authenticator.counter,
+					credential_device_type: authenticator.credentialDeviceType,
+					credential_backed_up: authenticator.credentialBackedUp ? 1 : 0,
+					transports: authenticator.transports ?? null,
+				},
+				{ onConflict: "credential_id" }
+			)
+			return authenticator
+		},
+		async updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator> {
+			const res = await supabase
+				.from(tableAuthenticators)
+				.select("credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports")
+				.eq("credential_id", credentialID)
+			const row = maybeFirst<Record<string, unknown>>(res as { data: unknown[]; error: unknown })
+			if (!row) throw new Error(`Authenticator not found: ${credentialID}`)
+			await supabase.from(tableAuthenticators).upsert(
+				{ ...row, credential_id: credentialID, counter: newCounter },
+				{ onConflict: "credential_id" }
+			)
+			return rowToAuthenticator({ ...row, counter: newCounter })
+		},
+		async listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]> {
+			const res = await supabase
+				.from(tableAuthenticators)
+				.select("credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports")
+				.eq("user_id", userId)
+			if (res.error || !res.data) return []
+			return (res.data as Record<string, unknown>[]).map(rowToAuthenticator)
 		},
 	}
 }

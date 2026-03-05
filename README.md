@@ -399,16 +399,54 @@ export function sqlChallengeStore(db: {
 
 ## Database
 
-Apply your adapter’s default Auth.js schema, then apply:
+Apply your adapter’s default Auth.js schema, then ensure CorePass tables and the WebAuthn **authenticators** store exist. The package exposes:
 
-- `db/corepass-schema.sql` (SQLite/D1)
-- `db/corepass-schema.postgres.sql` (PostgreSQL/Supabase)
+- **Migration runners** (run once to create tables): **D1** and **Azure Tables** only.
+- **Schema/table constants** (`AUTHENTICATORS_*`): every adapter has a constant (SQL string, schema snippet, or key/table descriptor) you can use for reference or to apply the schema yourself.
 
-This adds:
+CorePass tables:
 
-- `corepass_pending_registrations`
-- `corepass_identities` (CoreID → Auth.js `userId` mapping)
-- `corepass_profiles` (CorePass metadata like `o18y`, `kyc`, `provided_till`)
+- `corepass_pending_registrations` — pending passkey registrations until enrichment.
+- `corepass_pending` — generic key/payload store when `pending.strategy` is `"db"`.
+- `corepass_identities` — CoreID → Auth.js `userId` mapping.
+- `corepass_profiles` — CorePass metadata (o18y, kyc, provided_till, etc.).
+- **Authenticators** — WebAuthn credential storage (table/collection/key layout depends on adapter).
+
+### Initializing the database (how to populate tables)
+
+**D1 (Cloudflare)**  
+Run the migration once per database; safe to re-run (uses `CREATE TABLE IF NOT EXISTS`).
+
+```ts
+import { migrateD1 } from "authjs-corepass-provider"
+
+// In a Worker: await migrateD1(env.DB)
+// Or from a script that has a D1 binding
+await migrateD1(db)
+```
+
+This creates Auth.js tables (if `@auth/d1-adapter` is installed), CorePass tables, and the `authenticators` table. No existing tables or data are dropped or altered.
+
+**Azure Table Storage**  
+Create the table once (e.g. in a deploy step or one-off script).
+
+```ts
+import { migrateAzureTables } from "authjs-corepass-provider"
+import { TableClient } from "@azure/data-tables"
+
+const client = new TableClient(connectionString, "corepass")
+await migrateAzureTables(client)
+```
+
+**Other adapters (Postgres, Supabase, Xata, Redis, etc.)**  
+There is no migration runner; use the exported **authenticators schema constant** for your adapter and apply it yourself:
+
+- **Postgres / Neon / Prisma / Drizzle / Kysely / TypeORM / MikroORM / Sequelize / Supabase / Hasura**: use `AUTHENTICATORS_TABLE_SQL_POSTGRES` (or the adapter-specific re-export, e.g. `AUTHENTICATORS_TABLE_SQL_PRISMA`) and run the SQL.
+- **D1** (reference only; runner above does the work): `AUTHENTICATORS_TABLE_SQL_D1`.
+- **Azure Tables** (reference only): `AUTHENTICATORS_TABLE_AZURE_TABLES` (table name + partition/row key layout).
+- **DynamoDB, Dgraph, EdgeDB, Fauna, Firebase, MongoDB, Neo4j, PouchDB, SurrealDB, Unstorage, Upstash Redis, Xata**: use the corresponding `AUTHENTICATORS_*` constant (see package exports) and add the type/collection/table or key layout to your backend.
+
+All `AUTHENTICATORS_*` constants and migration runners are exported from the main entry point (`authjs-corepass-provider`). Naming is unified: constants use the **`AUTHENTICATORS_*`** prefix (plural); migration functions are `migrateD1` and `migrateAzureTables`; the only migration-related type is `AzureTablesMigrationClient`.
 
 ## Options
 

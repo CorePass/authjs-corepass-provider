@@ -1,3 +1,4 @@
+import type { AdapterAuthenticator } from "@auth/core/adapters"
 import type { CorePassStore, CorePassTx, CorePassTxContext } from "../types.js"
 
 export type PgLike = {
@@ -23,14 +24,32 @@ function boolFromDb(v: unknown): boolean | null {
 	return (v as number) === 1
 }
 
+function rowToAuthenticator(row: Record<string, unknown>): AdapterAuthenticator {
+	return {
+		credentialID: String(row.credential_id ?? ""),
+		userId: String(row.user_id ?? ""),
+		providerAccountId: String(row.provider_account_id ?? ""),
+		credentialPublicKey: String(row.credential_public_key ?? ""),
+		counter: typeof row.counter === "number" ? row.counter : 0,
+		credentialDeviceType: String(row.credential_device_type ?? ""),
+		credentialBackedUp: (row.credential_backed_up as number) === 1,
+		transports: row.transports != null ? String(row.transports) : null,
+	}
+}
+
 /**
- * CorePass store + pending (key/payload) + optional transaction support for PostgreSQL.
- * Merge with your Auth.js Postgres adapter: adapter = { ...authAdapter, ...corepassPostgresAdapter({ pool, schema }) }
+ * CorePass store + pending (key/payload) + WebAuthn + optional transaction support for PostgreSQL.
+ * Table: authenticators (see migrations/postgres AUTHENTICATORS_TABLE_SQL_POSTGRES). Merge with your Auth.js Postgres adapter.
  */
 export function corepassPostgresAdapter(opts: {
 	pool: PgLike
 	schema?: string
-}): CorePassStore & CorePassTx {
+}): CorePassStore & CorePassTx & {
+	getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null>
+	createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator>
+	updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator>
+	listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]>
+} {
 	const { pool, schema } = opts
 	const pre = schema ? `${schema}.` : ""
 
@@ -169,6 +188,52 @@ export function corepassPostgresAdapter(opts: {
 			} finally {
 				client.release()
 			}
+		},
+
+		async getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null> {
+			const res = await pool.query(
+				`SELECT credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports FROM ${pre}authenticators WHERE credential_id = $1`,
+				[credentialID]
+			)
+			const row = res.rows[0] as Record<string, unknown> | undefined
+			if (!row) return null
+			return rowToAuthenticator(row)
+		},
+		async createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator> {
+			await pool.query(
+				`INSERT INTO ${pre}authenticators (credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+				[
+					authenticator.credentialID,
+					authenticator.userId,
+					authenticator.providerAccountId,
+					authenticator.credentialPublicKey,
+					authenticator.counter,
+					authenticator.credentialDeviceType,
+					authenticator.credentialBackedUp ? 1 : 0,
+					authenticator.transports ?? null,
+				]
+			)
+			return authenticator
+		},
+		async updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator> {
+			const res = await pool.query(
+				`SELECT credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports FROM ${pre}authenticators WHERE credential_id = $1`,
+				[credentialID]
+			)
+			const row = res.rows[0] as Record<string, unknown> | undefined
+			if (!row) throw new Error(`Authenticator not found: ${credentialID}`)
+			await pool.query(`UPDATE ${pre}authenticators SET counter = $1 WHERE credential_id = $2`, [
+				newCounter,
+				credentialID,
+			])
+			return rowToAuthenticator({ ...row, counter: newCounter })
+		},
+		async listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]> {
+			const res = await pool.query(
+				`SELECT credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports FROM ${pre}authenticators WHERE user_id = $1`,
+				[userId]
+			)
+			return (res.rows as Record<string, unknown>[]).map(rowToAuthenticator)
 		},
 	}
 }

@@ -1,3 +1,4 @@
+import type { AdapterAuthenticator } from "@auth/core/adapters"
 import type { CorePassStore, CorePassTx } from "../types.js"
 
 /**
@@ -23,23 +24,43 @@ function boolFromDb(v: unknown): boolean | null {
 	return (v as number) === 1
 }
 
+function rowToAuthenticator(row: Record<string, unknown>): AdapterAuthenticator {
+	return {
+		credentialID: String(row.credential_id ?? ""),
+		userId: String(row.user_id ?? ""),
+		providerAccountId: String(row.provider_account_id ?? ""),
+		credentialPublicKey: String(row.credential_public_key ?? ""),
+		counter: typeof row.counter === "number" ? row.counter : 0,
+		credentialDeviceType: String(row.credential_device_type ?? ""),
+		credentialBackedUp: (row.credential_backed_up as number) === 1,
+		transports: row.transports != null ? String(row.transports) : null,
+	}
+}
+
 export type CorePassHasuraAdapterOptions = {
 	client: HasuraLike
-	/** Table names if different from default (corepass_pending, corepass_identities, corepass_profiles). */
+	/** Table names if different from default (corepass_pending, corepass_identities, corepass_profiles, authenticators). */
 	pendingTable?: string
 	identitiesTable?: string
 	profilesTable?: string
+	authenticatorsTable?: string
 }
 
 /**
- * CorePass store + pending for Hasura (Postgres-backed GraphQL). Expects tables corepass_pending, corepass_identities, corepass_profiles.
+ * CorePass store + pending + WebAuthn for Hasura (Postgres-backed GraphQL). Expects tables corepass_pending, corepass_identities, corepass_profiles, authenticators (see migrations/hasura).
  * Merge with your Auth.js Hasura adapter: adapter = { ...authAdapter, ...corepassHasuraAdapter({ client }) }
  */
-export function corepassHasuraAdapter(opts: CorePassHasuraAdapterOptions): CorePassStore & CorePassTx {
+export function corepassHasuraAdapter(opts: CorePassHasuraAdapterOptions): CorePassStore & CorePassTx & {
+	getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null>
+	createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator>
+	updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator>
+	listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]>
+} {
 	const { client } = opts
 	const pendingTable = opts.pendingTable ?? "corepass_pending"
 	const identitiesTable = opts.identitiesTable ?? "corepass_identities"
 	const profilesTable = opts.profilesTable ?? "corepass_profiles"
+	const authenticatorsTable = opts.authenticatorsTable ?? "authenticators"
 
 	async function runMutation(mutation: string, variables: Record<string, unknown>): Promise<void> {
 		const res = await client.request(mutation, variables)
@@ -166,6 +187,56 @@ export function corepassHasuraAdapter(opts: CorePassHasuraAdapterOptions): CoreP
 				kycDoc: row.kyc_doc ?? null,
 				providedTill: row.provided_till ?? null,
 			}
+		},
+
+		async getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null> {
+			const rows = await runQuery<Record<string, unknown>>(
+				`query($credentialID: String!) { ${authenticatorsTable}(where: { credential_id: { _eq: $credentialID } }) { credential_id user_id provider_account_id credential_public_key counter credential_device_type credential_backed_up transports } }`,
+				{ credentialID }
+			)
+			const row = rows[0]
+			if (!row) return null
+			return rowToAuthenticator(row)
+		},
+		async createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator> {
+			await runMutation(
+				`mutation($credential_id: String!, $user_id: String!, $provider_account_id: String!, $credential_public_key: String!, $counter: Int!, $credential_device_type: String!, $credential_backed_up: Int!, $transports: String) {
+					insert_${authenticatorsTable}_one(object: { credential_id: $credential_id, user_id: $user_id, provider_account_id: $provider_account_id, credential_public_key: $credential_public_key, counter: $counter, credential_device_type: $credential_device_type, credential_backed_up: $credential_backed_up, transports: $transports }) { credential_id }
+				}`,
+				{
+					credential_id: authenticator.credentialID,
+					user_id: authenticator.userId,
+					provider_account_id: authenticator.providerAccountId,
+					credential_public_key: authenticator.credentialPublicKey,
+					counter: authenticator.counter,
+					credential_device_type: authenticator.credentialDeviceType,
+					credential_backed_up: authenticator.credentialBackedUp ? 1 : 0,
+					transports: authenticator.transports ?? null,
+				}
+			)
+			return authenticator
+		},
+		async updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator> {
+			const rows = await runQuery<Record<string, unknown>>(
+				`query($credentialID: String!) { ${authenticatorsTable}(where: { credential_id: { _eq: $credentialID } }) { credential_id user_id provider_account_id credential_public_key counter credential_device_type credential_backed_up transports } }`,
+				{ credentialID }
+			)
+			const row = rows[0]
+			if (!row) throw new Error(`Authenticator not found: ${credentialID}`)
+			await runMutation(
+				`mutation($credentialID: String!, $counter: Int!) {
+					update_${authenticatorsTable}(where: { credential_id: { _eq: $credentialID } }, _set: { counter: $counter }) { affected_rows }
+				}`,
+				{ credentialID, counter: newCounter }
+			)
+			return rowToAuthenticator({ ...row, counter: newCounter })
+		},
+		async listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]> {
+			const rows = await runQuery<Record<string, unknown>>(
+				`query($userId: String!) { ${authenticatorsTable}(where: { user_id: { _eq: $userId } }) { credential_id user_id provider_account_id credential_public_key counter credential_device_type credential_backed_up transports } }`,
+				{ userId }
+			)
+			return rows.map(rowToAuthenticator)
 		},
 	}
 }

@@ -1,3 +1,4 @@
+import type { AdapterAuthenticator } from "@auth/core/adapters"
 import type { CorePassStore, CorePassTx } from "../types.js"
 
 /**
@@ -25,12 +26,29 @@ function boolFromDb(v: unknown): boolean | null {
 	return (v as number) === 1
 }
 
+function recordToAuthenticator(rec: { get: (key: string) => unknown }): AdapterAuthenticator {
+	return {
+		credentialID: String(rec.get("credential_id") ?? ""),
+		userId: String(rec.get("user_id") ?? ""),
+		providerAccountId: String(rec.get("provider_account_id") ?? ""),
+		credentialPublicKey: String(rec.get("credential_public_key") ?? ""),
+		counter: typeof rec.get("counter") === "number" ? (rec.get("counter") as number) : 0,
+		credentialDeviceType: String(rec.get("credential_device_type") ?? ""),
+		credentialBackedUp: (rec.get("credential_backed_up") as number) === 1,
+		transports: rec.get("transports") != null ? String(rec.get("transports")) : null,
+	}
+}
+
 /**
- * CorePass store + pending for Neo4j. Uses nodes: CorePassPending (key, payload_json, expires_at),
- * CorePassIdentity (core_id, user_id, ref_id), CorePassProfile (user_id, core_id, o18y, o21y, kyc, kyc_doc, provided_till).
+ * CorePass store + pending + WebAuthn for Neo4j. Uses nodes: CorePassPending, CorePassIdentity, CorePassProfile, CorePassAuthenticator (see migrations/neo4j).
  * Merge with your Auth.js Neo4j adapter: adapter = { ...authAdapter, ...corepassNeo4jAdapter(session) }
  */
-export function corepassNeo4jAdapter(session: Neo4jLike): CorePassStore & CorePassTx {
+export function corepassNeo4jAdapter(session: Neo4jLike): CorePassStore & CorePassTx & {
+	getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null>
+	createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator>
+	updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator>
+	listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]>
+} {
 	return {
 		async setPending(params, _ctx) {
 			const expiresAtSec = Math.floor(params.expiresAt.getTime() / 1000)
@@ -135,6 +153,65 @@ export function corepassNeo4jAdapter(session: Neo4jLike): CorePassStore & CorePa
 				kycDoc: (rec.get("kyc_doc") as string | null) ?? null,
 				providedTill: (rec.get("provided_till") as number | null) ?? null,
 			}
+		},
+
+		async getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null> {
+			const res = await session.run(
+				`MATCH (a:CorePassAuthenticator { credential_id: $credentialID })
+				 RETURN a.credential_id AS credential_id, a.user_id AS user_id, a.provider_account_id AS provider_account_id,
+				 a.credential_public_key AS credential_public_key, a.counter AS counter, a.credential_device_type AS credential_device_type,
+				 a.credential_backed_up AS credential_backed_up, a.transports AS transports`,
+				{ credentialID }
+			)
+			const rec = res.records[0]
+			if (!rec) return null
+			return recordToAuthenticator(rec)
+		},
+		async createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator> {
+			await session.run(
+				`MERGE (a:CorePassAuthenticator { credential_id: $credential_id })
+				 SET a.user_id = $user_id, a.provider_account_id = $provider_account_id, a.credential_public_key = $credential_public_key,
+				 a.counter = $counter, a.credential_device_type = $credential_device_type, a.credential_backed_up = $credential_backed_up, a.transports = $transports`,
+				{
+					credential_id: authenticator.credentialID,
+					user_id: authenticator.userId,
+					provider_account_id: authenticator.providerAccountId,
+					credential_public_key: authenticator.credentialPublicKey,
+					counter: authenticator.counter,
+					credential_device_type: authenticator.credentialDeviceType,
+					credential_backed_up: authenticator.credentialBackedUp ? 1 : 0,
+					transports: authenticator.transports ?? null,
+				}
+			)
+			return authenticator
+		},
+		async updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator> {
+			const res = await session.run(
+				`MATCH (a:CorePassAuthenticator { credential_id: $credentialID })
+				 RETURN a.credential_id AS credential_id, a.user_id AS user_id, a.provider_account_id AS provider_account_id,
+				 a.credential_public_key AS credential_public_key, a.counter AS counter, a.credential_device_type AS credential_device_type,
+				 a.credential_backed_up AS credential_backed_up, a.transports AS transports`,
+				{ credentialID }
+			)
+			const rec = res.records[0]
+			if (!rec) throw new Error(`Authenticator not found: ${credentialID}`)
+			await session.run(
+				`MATCH (a:CorePassAuthenticator { credential_id: $credentialID }) SET a.counter = $counter`,
+				{ credentialID, counter: newCounter }
+			)
+			return recordToAuthenticator({
+				get: (key: string) => (key === "counter" ? newCounter : rec.get(key)),
+			})
+		},
+		async listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]> {
+			const res = await session.run(
+				`MATCH (a:CorePassAuthenticator { user_id: $userId })
+				 RETURN a.credential_id AS credential_id, a.user_id AS user_id, a.provider_account_id AS provider_account_id,
+				 a.credential_public_key AS credential_public_key, a.counter AS counter, a.credential_device_type AS credential_device_type,
+				 a.credential_backed_up AS credential_backed_up, a.transports AS transports`,
+				{ userId }
+			)
+			return res.records.map(recordToAuthenticator)
 		},
 	}
 }

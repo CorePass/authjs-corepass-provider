@@ -1,6 +1,6 @@
 -- CorePass extension for Auth.js (EdgeDB)
 -- Add this module to your dbschema (e.g. dbschema/corepass.esdl) and run: edgedb migration create && edgedb migrate
--- The adapter uses corepass::Pending, corepass::Identity, corepass::Profile
+-- The adapter uses corepass::Pending, corepass::Identity, corepass::Profile, corepass::Authenticator (WebAuthn passkey).
 
 module corepass {
   type Pending {
@@ -36,5 +36,18 @@ module corepass {
     property kyc_doc -> str;
     property provided_till -> int64;
     required property updated_at -> int64;
+  }
+
+  type Authenticator {
+    required property credential_id -> str {
+      constraint exclusive;
+    };
+    required property user_id -> str;
+    required property provider_account_id -> str;
+    required property credential_public_key -> str;
+    required property counter -> int64;
+    required property credential_device_type -> str;
+    required property credential_backed_up -> int64;
+    property transports -> str;
   }
 }

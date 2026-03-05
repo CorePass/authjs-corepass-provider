@@ -34,6 +34,36 @@ export {
 	deriveEd448PublicKeyFromCoreId,
 } from "./server/coreid.js"
 
+// Migration runners and types
+export { migrateD1 } from "./migrations/d1.js"
+export { migrateAzureTables } from "./migrations/azure-tables.js"
+export type { AzureTablesMigrationClient } from "./migrations/azure-tables.js"
+
+// Authenticators schema/table/collection constants (AUTHENTICATORS_*), alphabetically by adapter
+export { AUTHENTICATORS_TABLE_AZURE_TABLES } from "./migrations/azure-tables.js"
+export { AUTHENTICATORS_TABLE_SQL_D1 } from "./migrations/d1.js"
+export { AUTHENTICATORS_TABLE_KEY_SCHEMA_DYNAMODB } from "./migrations/dynamodb.js"
+export { AUTHENTICATORS_SCHEMA_DGRAPH } from "./migrations/dgraph.js"
+export { AUTHENTICATORS_SCHEMA_EDGEDB } from "./migrations/edgedb.js"
+export { AUTHENTICATORS_COLLECTION_FAUNA } from "./migrations/fauna.js"
+export { AUTHENTICATORS_COLLECTION_FIREBASE } from "./migrations/firebase.js"
+export { AUTHENTICATORS_TABLE_SQL_HASURA } from "./migrations/hasura.js"
+export { AUTHENTICATORS_TABLE_SQL_KYSELY } from "./migrations/kysely.js"
+export { AUTHENTICATORS_TABLE_SQL_MIKRO_ORM } from "./migrations/mikro-orm.js"
+export { AUTHENTICATORS_COLLECTION_MONGODB } from "./migrations/mongodb.js"
+export { AUTHENTICATORS_NODE_NEO4J } from "./migrations/neo4j.js"
+export { AUTHENTICATORS_TABLE_SQL_NEON } from "./migrations/neon.js"
+export { AUTHENTICATORS_TABLE_SQL_POSTGRES } from "./migrations/postgres.js"
+export { AUTHENTICATORS_DOC_POUCHDB } from "./migrations/pouchdb.js"
+export { AUTHENTICATORS_TABLE_SQL_PRISMA, AUTHENTICATORS_MODEL_PRISMA } from "./migrations/prisma.js"
+export { AUTHENTICATORS_TABLE_SQL_SEQUELIZE } from "./migrations/sequelize.js"
+export { AUTHENTICATORS_TABLE_SQL_SUPABASE } from "./migrations/supabase.js"
+export { AUTHENTICATORS_TABLE_SURQL_SURREALDB } from "./migrations/surrealdb.js"
+export { AUTHENTICATORS_TABLE_SQL_TYPEORM } from "./migrations/typeorm.js"
+export { AUTHENTICATORS_KEY_UNSTORAGE } from "./migrations/unstorage.js"
+export { AUTHENTICATORS_KEY_UPSTASH_REDIS } from "./migrations/upstash-redis.js"
+export { AUTHENTICATORS_TABLE_XATA } from "./migrations/xata.js"
+
 export { corepassPostgresAdapter } from "./adapters/postgres.js"
 export { corepassD1Adapter } from "./adapters/d1.js"
 export { corepassSupabaseAdapter } from "./adapters/supabase.js"

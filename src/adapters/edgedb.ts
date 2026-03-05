@@ -1,3 +1,4 @@
+import type { AdapterAuthenticator } from "@auth/core/adapters"
 import type { CorePassStore, CorePassTx } from "../types.js"
 
 /**
@@ -25,12 +26,31 @@ function boolFromDb(v: unknown): boolean | null {
 	return (v as number) === 1
 }
 
+function rowToAuthenticator(row: Record<string, unknown>): AdapterAuthenticator {
+	return {
+		credentialID: String(row.credential_id ?? ""),
+		userId: String(row.user_id ?? ""),
+		providerAccountId: String(row.provider_account_id ?? ""),
+		credentialPublicKey: String(row.credential_public_key ?? ""),
+		counter: typeof row.counter === "number" ? row.counter : 0,
+		credentialDeviceType: String(row.credential_device_type ?? ""),
+		credentialBackedUp: (row.credential_backed_up as number) === 1,
+		transports: row.transports != null ? String(row.transports) : null,
+	}
+}
+
 /**
- * CorePass store + pending for EdgeDB. Use with edgedb client (run raw SQL or EdgeQL).
+ * CorePass store + pending + WebAuthn authenticator methods for EdgeDB. Use with edgedb client (run raw SQL or EdgeQL).
  * This adapter expects a minimal client that can run parameterized queries and return rows.
  * Merge with your Auth.js EdgeDB adapter: adapter = { ...authAdapter, ...corepassEdgeDBAdapter(client) }
+ * Schema: corepass::Pending, corepass::Identity, corepass::Profile, corepass::Authenticator (see migrations/edgedb or db/corepass-schema.edgedb.esdl).
  */
-export function corepassEdgeDBAdapter(client: EdgeDBLike): CorePassStore & CorePassTx {
+export function corepassEdgeDBAdapter(client: EdgeDBLike): CorePassStore & CorePassTx & {
+	getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null>
+	createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator>
+	updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator>
+	listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]>
+} {
 	async function query<T>(q: string, args: Record<string, unknown>): Promise<T[]> {
 		const result = await client.query(q, args)
 		return (Array.isArray(result) ? result : []) as T[]
@@ -139,6 +159,61 @@ export function corepassEdgeDBAdapter(client: EdgeDBLike): CorePassStore & CoreP
 				kycDoc: row.kyc_doc ?? null,
 				providedTill: row.provided_till ?? null,
 			}
+		},
+
+		async getAuthenticator(credentialID: string): Promise<AdapterAuthenticator | null> {
+			const rows = await query<Record<string, unknown>>(
+				`SELECT corepass::Authenticator { credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports } FILTER .credential_id = <str>$credentialID`,
+				{ credentialID }
+			)
+			const row = rows[0]
+			if (!row) return null
+			return rowToAuthenticator(row)
+		},
+		async createAuthenticator(authenticator: AdapterAuthenticator): Promise<AdapterAuthenticator> {
+			await client.execute(
+				`INSERT corepass::Authenticator {
+					credential_id := <str>$credential_id,
+					user_id := <str>$user_id,
+					provider_account_id := <str>$provider_account_id,
+					credential_public_key := <str>$credential_public_key,
+					counter := <int64>$counter,
+					credential_device_type := <str>$credential_device_type,
+					credential_backed_up := <int64>$credential_backed_up,
+					transports := <optional str>$transports
+				}`,
+				{
+					credential_id: authenticator.credentialID,
+					user_id: authenticator.userId,
+					provider_account_id: authenticator.providerAccountId,
+					credential_public_key: authenticator.credentialPublicKey,
+					counter: authenticator.counter,
+					credential_device_type: authenticator.credentialDeviceType,
+					credential_backed_up: authenticator.credentialBackedUp ? 1 : 0,
+					transports: authenticator.transports ?? null,
+				}
+			)
+			return authenticator
+		},
+		async updateAuthenticatorCounter(credentialID: string, newCounter: number): Promise<AdapterAuthenticator> {
+			const rows = await query<Record<string, unknown>>(
+				`SELECT corepass::Authenticator FILTER .credential_id = <str>$credentialID`,
+				{ credentialID }
+			)
+			const row = rows[0]
+			if (!row) throw new Error(`Authenticator not found: ${credentialID}`)
+			await client.execute(
+				`UPDATE corepass::Authenticator SET { counter := <int64>$counter } FILTER .credential_id = <str>$credentialID`,
+				{ counter: newCounter, credentialID }
+			)
+			return rowToAuthenticator({ ...row, counter: newCounter })
+		},
+		async listAuthenticatorsByUserId(userId: string): Promise<AdapterAuthenticator[]> {
+			const rows = await query<Record<string, unknown>>(
+				`SELECT corepass::Authenticator { credential_id, user_id, provider_account_id, credential_public_key, counter, credential_device_type, credential_backed_up, transports } FILTER .user_id = <str>$userId`,
+				{ userId }
+			)
+			return rows.map(rowToAuthenticator)
 		},
 	}
 }
